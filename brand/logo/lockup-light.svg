@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 56" width="280" height="56" role="img" aria-label="OrbioLabs logo">
+  <defs>
+    <linearGradient id="orbGradLight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1A6BFF"/>
+      <stop offset="100%" stop-color="#4D9FFF"/>
+    </linearGradient>
+  </defs>
+  <!-- Background: transparent (light context) -->
+
+  <!-- Icon mark — centered vertically at x=4, 48×48 -->
+  <!-- Outer arc -->
+  <path
+    d="M 4 28 A 20 20 0 0 1 44 28"
+    fill="none"
+    stroke="url(#orbGradLight)"
+    stroke-width="3.5"
+    stroke-linecap="round"
+  />
+  <!-- Middle arc -->
+  <path
+    d="M 42 32 A 15 15 0 0 1 6 32"
+    fill="none"
+    stroke="url(#orbGradLight)"
+    stroke-width="3.5"
+    stroke-linecap="round"
+  />
+  <!-- Inner arc -->
+  <path
+    d="M 13 25 A 10 10 0 0 1 35 25"
+    fill="none"
+    stroke="url(#orbGradLight)"
+    stroke-width="3.5"
+    stroke-linecap="round"
+  />
+  <!-- Center dot -->
+  <circle cx="24" cy="28" r="3" fill="#1A6BFF"/>
+
+  <!-- Wordmark — starts at x=60 -->
+  <!-- "Orbio" in Deep Ink -->
+  <text
+    x="60"
+    y="39"
+    font-family="Inter, system-ui, -apple-system, sans-serif"
+    font-weight="700"
+    font-size="32"
+    letter-spacing="-0.64"
+    fill="#0D0F14"
+  >Orbio</text>
+  <!-- "Labs" in Orb Blue (approx offset after "Orbio") -->
+  <text
+    x="157"
+    y="39"
+    font-family="Inter, system-ui, -apple-system, sans-serif"
+    font-weight="700"
+    font-size="32"
+    letter-spacing="-0.64"
+    fill="#1A6BFF"
+  >Labs</text>
+</svg>

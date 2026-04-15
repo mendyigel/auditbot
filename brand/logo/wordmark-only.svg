@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 48" width="200" height="48" role="img" aria-label="OrbioLabs wordmark">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@700&amp;display=swap');
+    </style>
+  </defs>
+  <!-- "Orbio" in Deep Ink -->
+  <text
+    x="0"
+    y="35"
+    font-family="Inter, system-ui, -apple-system, sans-serif"
+    font-weight="700"
+    font-size="36"
+    letter-spacing="-0.72"
+    fill="#0D0F14"
+  >Orbio</text>
+  <!-- "Labs" in Orb Blue -->
+  <text
+    x="112"
+    y="35"
+    font-family="Inter, system-ui, -apple-system, sans-serif"
+    font-weight="700"
+    font-size="36"
+    letter-spacing="-0.72"
+    fill="#1A6BFF"
+  >Labs</text>
+</svg>

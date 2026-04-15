@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" width="180" height="180" role="img" aria-label="OrbioLabs Apple touch icon">
+  <defs>
+    <linearGradient id="fgLarge" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1A6BFF"/>
+      <stop offset="100%" stop-color="#4D9FFF"/>
+    </linearGradient>
+  </defs>
+  <!-- Light bg for Apple touch icon -->
+  <rect width="180" height="180" fill="#F5F6FA" rx="36"/>
+  <!-- Outer arc -->
+  <path d="M 18 90 A 72 72 0 0 1 162 90" fill="none" stroke="url(#fgLarge)" stroke-width="12" stroke-linecap="round"/>
+  <!-- Middle arc -->
+  <path d="M 156 108 A 54 54 0 0 1 24 108" fill="none" stroke="url(#fgLarge)" stroke-width="12" stroke-linecap="round"/>
+  <!-- Inner arc -->
+  <path d="M 45 80 A 36 36 0 0 1 135 80" fill="none" stroke="url(#fgLarge)" stroke-width="12" stroke-linecap="round"/>
+  <!-- Center dot -->
+  <circle cx="90" cy="90" r="10" fill="#1A6BFF"/>
+</svg>
