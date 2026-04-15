@@ -4,6 +4,7 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { auditUrl } = require('./auditor');
 const { generateHtml } = require('./report');
+const { generatePdf } = require('./pdf');
 const {
   createCheckoutSession,
   handleWebhook,
@@ -43,9 +44,10 @@ app.get('/', (_req, res) => {
     version: '1.0.0',
     description: 'Automated SEO, performance & accessibility audits with shareable HTML reports',
     endpoints: {
-      'POST /audit': 'Run an audit (requires API key). Body: { url, format? }',
+      'POST /audit': 'Run an audit (requires API key). Body: { url, format? } — format: json|html|pdf',
       'GET /audit?url=…': 'Browser-friendly audit (requires API key)',
       'GET /report/:id': 'View a cached HTML report by ID',
+      'GET /report/:id/pdf': 'Download white-label PDF report (optional ?agency=Name&agencyUrl=…)',
       'GET /health': 'Health check',
       'POST /billing/checkout': 'Subscribe at $29/month — returns { url } to Stripe checkout',
       'POST /billing/portal': 'Manage your subscription — Body: { apiKey }',
@@ -214,9 +216,9 @@ app.post('/audit', requireActiveSubscription, async (req, res) => {
   try {
     const audit = await auditUrl(targetUrl);
 
-    // Cache the HTML report
+    // Cache the HTML report and raw audit data for later PDF downloads
     const reportId = uuidv4();
-    reportCache.set(reportId, { html: generateHtml(audit), createdAt: Date.now() });
+    reportCache.set(reportId, { html: generateHtml(audit), audit, createdAt: Date.now() });
 
     const reportUrl = `/report/${reportId}`;
 
@@ -225,7 +227,16 @@ app.post('/audit', requireActiveSubscription, async (req, res) => {
       return res.send(reportCache.get(reportId).html);
     }
 
-    return res.json({ ...audit, reportUrl });
+    if (format === 'pdf') {
+      const { agency = '', agencyUrl = '' } = req.body || {};
+      const pdfBuffer = await generatePdf(audit, { agencyName: agency, agencyUrl });
+      const filename = `audit-${encodeURIComponent(targetUrl.replace(/https?:\/\//, ''))}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.send(pdfBuffer);
+    }
+
+    return res.json({ ...audit, reportUrl, pdfUrl: `${reportUrl}/pdf` });
   } catch (err) {
     console.error('[audit error]', err);
     return res.status(500).json({ error: 'Audit failed', detail: err.message });
@@ -243,6 +254,29 @@ app.get('/report/:id', (req, res) => {
   }
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(entry.html);
+});
+
+/**
+ * GET /report/:id/pdf
+ * Downloads the cached report as a white-label PDF.
+ * Optional query params: agency (name), agencyUrl
+ */
+app.get('/report/:id/pdf', async (req, res) => {
+  const entry = reportCache.get(req.params.id);
+  if (!entry) {
+    return res.status(404).json({ error: 'Report not found or expired. Re-run the audit to generate a new one.' });
+  }
+  try {
+    const { agency = '', agencyUrl = '' } = req.query;
+    const pdfBuffer = await generatePdf(entry.audit, { agencyName: agency, agencyUrl });
+    const safeUrl = entry.audit.url.replace(/https?:\/\//, '').replace(/[^a-z0-9.-]/gi, '-');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="audit-${safeUrl}.pdf"`);
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error('[pdf error]', err);
+    return res.status(500).json({ error: 'PDF generation failed', detail: err.message });
+  }
 });
 
 /**
