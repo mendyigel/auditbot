@@ -12,25 +12,25 @@ const {
   lookupSubscription,
 } = require('./billing');
 const { requireActiveSubscription } = require('./auth');
+const db = require('./db');
+const { saveReport, getReport, deleteReport, USE_S3 } = require('./storage');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// In-memory report cache (keyed by report UUID, TTL 1 hour)
-const reportCache = new Map();
-const CACHE_TTL_MS = 60 * 60 * 1000;
+// Report TTL — default 30 days; set REPORT_TTL_DAYS env var to override
+const REPORT_TTL_MS = (parseInt(process.env.REPORT_TTL_DAYS, 10) || 30) * 24 * 60 * 60 * 1000;
 
 // Stripe webhooks require raw body — mount before express.json()
 app.use('/billing/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
-// Clean up expired cache entries every 10 minutes
+// Prune old report metadata (and orphaned files) daily
 setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of reportCache.entries()) {
-    if (now - entry.createdAt > CACHE_TTL_MS) reportCache.delete(key);
-  }
-}, 10 * 60 * 1000);
+  db.pruneOldReports(REPORT_TTL_MS);
+}, 24 * 60 * 60 * 1000);
+
+console.log(`[storage] Using ${USE_S3 ? 'S3 (bucket: ' + process.env.S3_BUCKET + ')' : 'local filesystem'} for report storage`);
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -215,16 +215,18 @@ app.post('/audit', requireActiveSubscription, async (req, res) => {
 
   try {
     const audit = await auditUrl(targetUrl);
+    const html = generateHtml(audit);
 
-    // Cache the HTML report and raw audit data for later PDF downloads
+    // Persist the HTML report and raw audit data
     const reportId = uuidv4();
-    reportCache.set(reportId, { html: generateHtml(audit), audit, createdAt: Date.now() });
+    const storageKey = await saveReport(reportId, html);
+    db.saveReportMeta({ id: reportId, url: targetUrl, storageKey, audit });
 
     const reportUrl = `/report/${reportId}`;
 
     if (format === 'html') {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      return res.send(reportCache.get(reportId).html);
+      return res.send(html);
     }
 
     if (format === 'pdf') {
@@ -245,15 +247,19 @@ app.post('/audit', requireActiveSubscription, async (req, res) => {
 
 /**
  * GET /report/:id
- * Serves a cached HTML report.
+ * Serves a persisted HTML report.
  */
-app.get('/report/:id', (req, res) => {
-  const entry = reportCache.get(req.params.id);
-  if (!entry) {
-    return res.status(404).send('<h1>Report not found or expired</h1><p>Reports expire after 1 hour. Re-run the audit to generate a new one.</p>');
+app.get('/report/:id', async (req, res) => {
+  const meta = db.getReportMeta(req.params.id);
+  if (!meta) {
+    return res.status(404).send('<h1>Report not found</h1><p>This report does not exist or has been removed. Re-run the audit to generate a new one.</p>');
+  }
+  const html = await getReport(meta.storageKey);
+  if (!html) {
+    return res.status(404).send('<h1>Report file missing</h1><p>The report file could not be retrieved. Re-run the audit to generate a new one.</p>');
   }
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(entry.html);
+  res.send(html);
 });
 
 /**
@@ -262,14 +268,14 @@ app.get('/report/:id', (req, res) => {
  * Optional query params: agency (name), agencyUrl
  */
 app.get('/report/:id/pdf', async (req, res) => {
-  const entry = reportCache.get(req.params.id);
-  if (!entry) {
-    return res.status(404).json({ error: 'Report not found or expired. Re-run the audit to generate a new one.' });
+  const meta = db.getReportMeta(req.params.id);
+  if (!meta) {
+    return res.status(404).json({ error: 'Report not found. Re-run the audit to generate a new one.' });
   }
   try {
     const { agency = '', agencyUrl = '' } = req.query;
-    const pdfBuffer = await generatePdf(entry.audit, { agencyName: agency, agencyUrl });
-    const safeUrl = entry.audit.url.replace(/https?:\/\//, '').replace(/[^a-z0-9.-]/gi, '-');
+    const pdfBuffer = await generatePdf(meta.audit, { agencyName: agency, agencyUrl });
+    const safeUrl = meta.audit.url.replace(/https?:\/\//, '').replace(/[^a-z0-9.-]/gi, '-');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="audit-${safeUrl}.pdf"`);
     return res.send(pdfBuffer);

@@ -18,6 +18,7 @@
  */
 
 const crypto = require('crypto');
+const db = require('./db');
 
 // Lazy-load Stripe to allow server to boot without credentials (dev/test mode)
 let _stripe = null;
@@ -31,45 +32,28 @@ function getStripe() {
   return _stripe;
 }
 
-// ── In-memory subscription store ──────────────────────────────────────────────
-// Shape: Map<apiKey, { email, customerId, subscriptionId, status, createdAt }>
-// status: 'active' | 'cancelled' | 'past_due' | 'trialing' | 'incomplete'
-//
-// This will be replaced with persistent DB storage in MAN-9.
-const subscriptions = new Map();
-
-// Secondary index: customerId → apiKey (for webhook lookups)
-const customerIndex = new Map();
-
 function generateApiKey() {
   return 'ab_live_' + crypto.randomBytes(24).toString('hex');
 }
 
 function getOrCreateApiKeyForCustomer(customerId, email) {
   // If we already have a key for this customer, return it
-  const existingKey = customerIndex.get(customerId);
-  if (existingKey) return existingKey;
+  const existing = db.getSubscriptionByCustomerId(customerId);
+  if (existing) return existing.apiKey;
 
   const apiKey = generateApiKey();
-  subscriptions.set(apiKey, {
-    email,
-    customerId,
-    subscriptionId: null,
-    status: 'incomplete',
-    createdAt: Date.now(),
-  });
-  customerIndex.set(customerId, apiKey);
+  db.upsertSubscription({ apiKey, email, customerId, status: 'incomplete' });
   return apiKey;
 }
 
 /** Returns the subscription record for a given API key, or null. */
 function lookupSubscription(apiKey) {
-  return subscriptions.get(apiKey) || null;
+  return db.getSubscriptionByApiKey(apiKey);
 }
 
 /** Returns true if the API key has an active (or trialing) subscription. */
 function isActive(apiKey) {
-  const sub = subscriptions.get(apiKey);
+  const sub = db.getSubscriptionByApiKey(apiKey);
   return sub && (sub.status === 'active' || sub.status === 'trialing');
 }
 
@@ -124,49 +108,41 @@ async function handleWebhook(rawBody, signature) {
       const customerId = session.customer;
       const email = session.customer_details?.email || session.customer_email || '';
       const apiKey = getOrCreateApiKeyForCustomer(customerId, email);
-      const sub = subscriptions.get(apiKey);
-      if (sub) {
-        sub.subscriptionId = session.subscription;
-        // Status will be confirmed by customer.subscription.updated, but set active now
-        sub.status = 'active';
-      }
+      db.updateSubscriptionStatus({
+        customerId,
+        status: 'active',
+        subscriptionId: session.subscription,
+      });
       console.log('[stripe] checkout complete — customer:', customerId, '— apiKey:', apiKey);
       break;
     }
 
     case 'customer.subscription.updated': {
       const subscription = data.object;
-      const customerId = subscription.customer;
-      const apiKey = customerIndex.get(customerId);
-      if (apiKey) {
-        const sub = subscriptions.get(apiKey);
-        if (sub) {
-          sub.subscriptionId = subscription.id;
-          sub.status = subscription.status; // active / past_due / cancelled etc.
-        }
-      }
+      db.updateSubscriptionStatus({
+        customerId: subscription.customer,
+        status: subscription.status,
+        subscriptionId: subscription.id,
+      });
       break;
     }
 
     case 'customer.subscription.deleted': {
       const subscription = data.object;
-      const customerId = subscription.customer;
-      const apiKey = customerIndex.get(customerId);
-      if (apiKey) {
-        const sub = subscriptions.get(apiKey);
-        if (sub) sub.status = 'cancelled';
-      }
+      db.updateSubscriptionStatus({
+        customerId: subscription.customer,
+        status: 'cancelled',
+        subscriptionId: subscription.id,
+      });
       break;
     }
 
     case 'invoice.payment_failed': {
       const invoice = data.object;
-      const customerId = invoice.customer;
-      const apiKey = customerIndex.get(customerId);
-      if (apiKey) {
-        const sub = subscriptions.get(apiKey);
-        if (sub) sub.status = 'past_due';
-      }
+      db.updateSubscriptionStatus({
+        customerId: invoice.customer,
+        status: 'past_due',
+      });
       break;
     }
 
@@ -196,7 +172,4 @@ module.exports = {
   createCheckoutSession,
   handleWebhook,
   createPortalSession,
-  // Exposed for MAN-9 (DB persistence): allows seeding from DB on startup
-  subscriptions,
-  customerIndex,
 };
