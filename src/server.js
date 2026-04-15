@@ -1,5 +1,8 @@
 'use strict';
 
+// Initialise Sentry before anything else so all errors are captured.
+const Sentry = require('./monitoring');
+
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { auditUrl } = require('./auditor');
@@ -14,6 +17,10 @@ const {
 const { requireActiveSubscription } = require('./auth');
 const db = require('./db');
 const { saveReport, getReport, deleteReport, USE_S3 } = require('./storage');
+const { generateLandingPage } = require('./landing');
+const { consentBannerSnippet } = require('./consent-banner');
+const { appPageAnalyticsSnippet, trackServerEvent } = require('./analytics');
+const emailService = require('./email');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,15 +37,97 @@ setInterval(() => {
   db.pruneOldReports(REPORT_TTL_MS);
 }, 24 * 60 * 60 * 1000);
 
+// ── Trial email scheduler ──────────────────────────────────────────────────────
+// Checks daily for subscriptions that need day-3, day-10, day-13, or day-14
+// lifecycle emails based on how long since they subscribed.
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+async function runTrialEmailSchedule() {
+  const now = Date.now();
+  // Fetch all active/trialing subs created more than 2 days ago (earliest possible trigger)
+  const subs = db.getSubscriptionsForTrialEmails(now - 2 * DAY_MS);
+
+  for (const sub of subs) {
+    const ageMs  = now - sub.createdAt;
+    const ageDays = ageMs / DAY_MS;
+    const sent   = sub.emailsSent || {};
+
+    try {
+      // Day 3: tips email — only if no audits run yet
+      if (ageDays >= 3 && ageDays < 4 && !sent.day3) {
+        if (sub.auditCount === 0) {
+          await emailService.sendTrialDay3(sub.email);
+        }
+        db.markEmailSent(sub.apiKey, 'day3');
+      }
+
+      // Day 10: 4-days-left warning
+      if (ageDays >= 10 && ageDays < 11 && !sent.day10) {
+        await emailService.sendTrialDay10(sub.email);
+        db.markEmailSent(sub.apiKey, 'day10');
+      }
+
+      // Day 13: final warning
+      if (ageDays >= 13 && ageDays < 14 && !sent.day13) {
+        await emailService.sendTrialDay13(sub.email);
+        db.markEmailSent(sub.apiKey, 'day13');
+      }
+
+      // Day 14: trial expired (only send if still active — paid subs skip this)
+      if (ageDays >= 14 && ageDays < 15 && !sent.day14) {
+        if (sub.status !== 'active') {
+          await emailService.sendTrialExpired(sub.email);
+        }
+        db.markEmailSent(sub.apiKey, 'day14');
+      }
+    } catch (err) {
+      console.error(`[email scheduler] Error for ${sub.email}:`, err.message);
+    }
+  }
+}
+
+// Run once at startup (catches any missed sends), then daily
+runTrialEmailSchedule().catch((err) => console.error('[email scheduler] startup run failed:', err.message));
+setInterval(() => {
+  runTrialEmailSchedule().catch((err) => console.error('[email scheduler] daily run failed:', err.message));
+}, DAY_MS);
+
 console.log(`[storage] Using ${USE_S3 ? 'S3 (bucket: ' + process.env.S3_BUCKET + ')' : 'local filesystem'} for report storage`);
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 /**
  * GET /
- * Simple landing page / health check
+ * orbiolabs.com landing page with email waitlist capture
  */
 app.get('/', (_req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(generateLandingPage());
+});
+
+/**
+ * POST /waitlist
+ * Email capture for early-access waitlist.
+ * Body: { email: string }
+ * Stores the email in the DB; a future drip campaign can be wired to it.
+ */
+app.post('/waitlist', express.json(), (req, res) => {
+  const { email } = req.body || {};
+  if (!email || typeof email !== 'string' || !email.includes('@')) {
+    return res.status(400).json({ error: 'Valid email required' });
+  }
+  const trimmed = email.trim().toLowerCase();
+  db.saveWaitlistEmail(trimmed);
+  console.log(`[waitlist] Signup: ${trimmed}`);
+  return res.json({ ok: true });
+});
+
+/**
+ * GET /api
+ * JSON API descriptor (replaces the old root JSON response)
+ */
+app.get('/api', (_req, res) => {
   res.json({
     service: 'AuditBot',
     version: '1.0.0',
@@ -60,9 +149,38 @@ app.get('/', (_req, res) => {
 
 /**
  * GET /health
+ * Returns 200 + JSON when all systems are operational.
+ * Returns 503 + JSON when a critical dependency is unhealthy.
+ * Monitored by UptimeRobot at 1-minute intervals.
  */
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
+  const checks = {};
+  let allOk = true;
+
+  // Database liveness: a cheap ping query
+  try {
+    db.ping();
+    checks.database = 'ok';
+  } catch (err) {
+    checks.database = 'error';
+    allOk = false;
+  }
+
+  // Storage mode (informational — not a failure condition)
+  checks.storage = USE_S3 ? 's3' : 'local';
+
+  // Billing enabled (informational)
+  checks.billing = !!process.env.STRIPE_SECRET_KEY ? 'enabled' : 'disabled';
+
+  const payload = {
+    status: allOk ? 'ok' : 'degraded',
+    version: '1.0.0',
+    uptime: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+    checks,
+  };
+
+  res.status(allOk ? 200 : 503).json(payload);
 });
 
 // ── Billing routes ────────────────────────────────────────────────────────────
@@ -107,6 +225,8 @@ h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-
 <p>Your subscription is active. Your API key will be sent to your email once the webhook confirms payment.</p>
 <p>If you need your key immediately, check your inbox or contact support.</p>
 <p><a href="/">Back to AuditBot</a></p>
+${appPageAnalyticsSnippet('billing/success')}
+${consentBannerSnippet()}
 </body></html>`);
 });
 
@@ -124,6 +244,8 @@ app.get('/billing/cancel', (_req, res) => {
 <body>
 <h1>Checkout cancelled</h1>
 <p>No charge was made. <a href="/billing/checkout">Try again</a> when you're ready.</p>
+${appPageAnalyticsSnippet('billing/cancel')}
+${consentBannerSnippet()}
 </body></html>`);
 });
 
@@ -222,6 +344,14 @@ app.post('/audit', requireActiveSubscription, async (req, res) => {
     const storageKey = await saveReport(reportId, html);
     db.saveReportMeta({ id: reportId, url: targetUrl, storageKey, audit });
 
+    // Track audit count for trial email triggers
+    if (req.subscription?.apiKey) {
+      db.incrementAuditCount(req.subscription.apiKey);
+    }
+
+    // Server-side analytics event
+    trackServerEvent('audit_run', { format }, req).catch(() => {});
+
     const reportUrl = `/report/${reportId}`;
 
     if (format === 'html') {
@@ -278,6 +408,7 @@ app.get('/report/:id/pdf', async (req, res) => {
     const safeUrl = meta.audit.url.replace(/https?:\/\//, '').replace(/[^a-z0-9.-]/gi, '-');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="audit-${safeUrl}.pdf"`);
+    trackServerEvent('pdf_export', {}, req).catch(() => {});
     return res.send(pdfBuffer);
   } catch (err) {
     console.error('[pdf error]', err);
@@ -309,6 +440,11 @@ app.get('/audit', requireActiveSubscription, async (req, res) => {
     return res.status(500).json({ error: 'Audit failed', detail: err.message });
   }
 });
+
+// ── Sentry error handler (must be after all routes, before other error handlers)
+if (process.env.SENTRY_DSN) {
+  app.use(Sentry.expressErrorHandler());
+}
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
