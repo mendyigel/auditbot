@@ -22,6 +22,7 @@ const { requireActiveSubscription, requirePdfAllowed } = require('./auth');
 const db = require('./db');
 const { saveReport, getReport, deleteReport, USE_S3 } = require('./storage');
 const { generateLandingPage } = require('./landing');
+const { generateBlogIndex, generateBlogPost } = require('./blog');
 const { consentBannerSnippet } = require('./consent-banner');
 const { appPageAnalyticsSnippet, trackServerEvent } = require('./analytics');
 const emailService = require('./email');
@@ -108,6 +109,31 @@ console.log(`[storage] Using ${USE_S3 ? 'S3 (bucket: ' + process.env.S3_BUCKET +
 app.get('/', (_req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(generateLandingPage());
+});
+
+/**
+ * GET /blog
+ * OrbioLabs blog index — lists all posts sorted by date (newest first).
+ */
+app.get('/blog', (_req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(generateBlogIndex());
+});
+
+/**
+ * GET /blog/:slug
+ * Individual blog post page. Returns 404 if the post slug is not found.
+ */
+app.get('/blog/:slug', (req, res) => {
+  const html = generateBlogPost(req.params.slug);
+  if (!html) {
+    return res.status(404).send(`<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Post Not Found — OrbioLabs Blog</title>
+<style>body{font-family:system-ui,sans-serif;background:#0f172a;color:#f1f5f9;max-width:600px;margin:80px auto;padding:0 24px}a{color:#3b82f6}</style></head>
+<body><h1>Post not found</h1><p>This post doesn't exist or has been moved.</p><p><a href="/blog">&larr; Back to Blog</a></p></body></html>`);
+  }
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
 });
 
 /**
