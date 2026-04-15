@@ -65,6 +65,12 @@ function generateLandingPage() {
       transition: background 0.15s;
     }
     nav .cta-nav:hover { background: var(--brand-dark); text-decoration: none; }
+    nav .cta-nav-secondary {
+      color: var(--muted);
+      font-size: 0.875rem;
+      margin-right: 16px;
+    }
+    nav .cta-nav-secondary:hover { color: var(--text); text-decoration: none; }
 
     /* ── Hero ───────────────────────────────────────────────────────────────── */
     .hero {
@@ -234,6 +240,18 @@ function generateLandingPage() {
       border-radius: 16px;
       padding: 40px 32px;
     }
+    .trial-badge {
+      display: inline-block;
+      background: rgba(74,222,128,0.15);
+      color: #4ade80;
+      border: 1px solid rgba(74,222,128,0.3);
+      border-radius: 99px;
+      padding: 4px 14px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      margin-bottom: 16px;
+    }
     .price-amount {
       font-size: 3rem;
       font-weight: 800;
@@ -256,6 +274,23 @@ function generateLandingPage() {
     }
     .price-features li:last-child { border: none; }
     .price-features .check { color: #4ade80; font-weight: 700; }
+    .btn-trial {
+      display: block;
+      width: 100%;
+      padding: 14px;
+      background: var(--brand);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.15s;
+      text-align: center;
+      text-decoration: none;
+      margin-bottom: 12px;
+    }
+    .btn-trial:hover { background: var(--brand-dark); text-decoration: none; }
     .btn-subscribe {
       display: block;
       width: 100%;
@@ -272,6 +307,11 @@ function generateLandingPage() {
       text-decoration: none;
     }
     .btn-subscribe:hover { background: var(--brand-dark); text-decoration: none; }
+    .trial-note {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 8px;
+    }
 
     /* ── Footer ─────────────────────────────────────────────────────────────── */
     footer {
@@ -295,21 +335,24 @@ function generateLandingPage() {
 <!-- ── Navigation ─────────────────────────────────────────────────────────── -->
 <nav>
   <div class="logo">Orbio<span>Labs</span></div>
-  <a href="#waitlist-section" class="cta-nav">Join Waitlist</a>
+  <div>
+    <a href="/billing/checkout" class="cta-nav-secondary">Sign in</a>
+    <a href="#pricing" class="cta-nav">Start free trial</a>
+  </div>
 </nav>
 
 <!-- ── Hero ───────────────────────────────────────────────────────────────── -->
-<section class="hero" id="waitlist-section">
-  <div class="badge">Now in early access</div>
+<section class="hero" id="trial-form-section">
+  <div class="badge">14-day free trial · No charge today</div>
   <h1>Automated audits for <em>SEO, performance &amp; accessibility</em></h1>
   <p>AuditBot scans any URL and delivers actionable, white-label reports in seconds. Built for agencies, freelancers, and dev teams.</p>
 
-  <form id="waitlist" action="/waitlist" method="POST" novalidate>
+  <form id="trial-form" novalidate>
     <input type="email" name="email" placeholder="you@company.com" required autocomplete="email" />
-    <button type="submit" id="waitlist-btn">Get early access</button>
+    <button type="submit" id="trial-btn">Start free trial</button>
   </form>
-  <div class="waitlist-note">No spam. Early access — $29/mo at launch.</div>
-  <div id="waitlist-msg">You're on the list! We'll be in touch soon.</div>
+  <div class="waitlist-note">Credit card required &mdash; no charge for 14 days. Cancel anytime.</div>
+  <div id="trial-msg" style="display:none;margin-top:12px;font-size:0.95rem;color:#4ade80;font-weight:600;">Redirecting to secure checkout&hellip;</div>
 </section>
 
 <!-- ── Trust bar ──────────────────────────────────────────────────────────── -->
@@ -318,7 +361,7 @@ function generateLandingPage() {
   <div class="trust-item"><span class="num">60+</span>audit signals</div>
   <div class="trust-item"><span class="num">&lt;10s</span>per report</div>
   <div class="trust-item"><span class="num">PDF</span>white-label export</div>
-  <div class="trust-item"><span class="num">$29</span>/month flat</div>
+  <div class="trust-item"><span class="num">14</span>day free trial</div>
 </div>
 
 <!-- ── Features ───────────────────────────────────────────────────────────── -->
@@ -359,20 +402,23 @@ function generateLandingPage() {
 </section>
 
 <!-- ── Pricing ─────────────────────────────────────────────────────────────── -->
-<section class="pricing">
+<section class="pricing" id="pricing">
   <h2>Simple, flat pricing</h2>
   <div class="price-card">
+    <div class="trial-badge">14-day free trial</div>
     <div class="price-amount"><span>$</span>29</div>
-    <div class="price-period">per month · cancel anytime</div>
+    <div class="price-period">per month after trial &middot; cancel anytime</div>
     <ul class="price-features">
       <li><span class="check">✓</span> Unlimited audits</li>
       <li><span class="check">✓</span> Full API access</li>
       <li><span class="check">✓</span> White-label PDF reports</li>
       <li><span class="check">✓</span> Shareable report links</li>
-      <li><span class="check">✓</span> 30-day report retention</li>
+      <li><span class="check">✓</span> 90-day report retention</li>
+      <li><span class="check">✓</span> Scheduled recurring audits</li>
       <li><span class="check">✓</span> Email support</li>
     </ul>
-    <a href="/billing/checkout" class="btn-subscribe">Subscribe now</a>
+    <a href="#trial-form-section" class="btn-trial" id="pricing-trial-btn">Start 14-day free trial</a>
+    <div class="trial-note">Credit card required &mdash; no charge for 14 days. Cancel before trial ends and pay nothing.</div>
   </div>
 </section>
 
@@ -381,37 +427,55 @@ function generateLandingPage() {
   <p>&copy; 2026 Orbio Labs &mdash; <a href="/privacy">Privacy policy</a> &mdash; <a href="mailto:hello@orbiolabs.com">hello@orbiolabs.com</a></p>
 </footer>
 
-<!-- ── Waitlist form JS ──────────────────────────────────────────────────────── -->
+<!-- ── Trial form JS ────────────────────────────────────────────────────────── -->
 <script>
 (function () {
-  var form = document.getElementById('waitlist');
-  var btn  = document.getElementById('waitlist-btn');
-  var msg  = document.getElementById('waitlist-msg');
-  if (!form) return;
-  form.addEventListener('submit', function (e) {
-    e.preventDefault();
-    var email = form.elements['email'].value.trim();
-    if (!email) return;
-    btn.disabled = true;
-    btn.textContent = 'Joining…';
-    fetch('/waitlist', {
+  function startTrial(email) {
+    return fetch('/billing/trial', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: email })
-    })
-    .then(function (r) { return r.ok ? r.json() : Promise.reject(r); })
-    .then(function () {
-      form.style.display = 'none';
-      msg.style.display = 'block';
-      // Notify analytics module
-      document.dispatchEvent(new CustomEvent('waitlist:submitted'));
-    })
-    .catch(function () {
-      btn.disabled = false;
-      btn.textContent = 'Get early access';
-      alert('Something went wrong. Please try again.');
+      body: JSON.stringify({ email: email || undefined })
+    }).then(function (r) { return r.ok ? r.json() : r.json().then(function (d) { return Promise.reject(d); }); });
+  }
+
+  // Hero form
+  var form = document.getElementById('trial-form');
+  var btn  = document.getElementById('trial-btn');
+  var msg  = document.getElementById('trial-msg');
+  if (form) {
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var email = form.elements['email'].value.trim();
+      if (!email) return;
+      btn.disabled = true;
+      btn.textContent = 'Starting trial…';
+      startTrial(email)
+        .then(function (data) {
+          msg.style.display = 'block';
+          document.dispatchEvent(new CustomEvent('trial:started'));
+          window.location.href = data.url;
+        })
+        .catch(function (err) {
+          btn.disabled = false;
+          btn.textContent = 'Start free trial';
+          alert((err && err.error) ? err.error : 'Something went wrong. Please try again.');
+        });
     });
-  });
+  }
+
+  // Pricing CTA — scrolls to hero form and clicks
+  var pricingBtn = document.getElementById('pricing-trial-btn');
+  if (pricingBtn) {
+    pricingBtn.addEventListener('click', function (e) {
+      e.preventDefault();
+      var section = document.getElementById('trial-form-section');
+      if (section) section.scrollIntoView({ behavior: 'smooth' });
+      setTimeout(function () {
+        var input = form && form.elements['email'];
+        if (input) input.focus();
+      }, 400);
+    });
+  }
 })();
 </script>
 

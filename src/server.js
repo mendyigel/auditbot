@@ -10,11 +10,15 @@ const { generateHtml } = require('./report');
 const { generatePdf } = require('./pdf');
 const {
   createCheckoutSession,
+  createTrialCheckoutSession,
   handleWebhook,
   createPortalSession,
   lookupSubscription,
+  getTrialInfo,
+  TRIAL_AUDIT_LIMIT,
+  TRIAL_PDF_LIMIT,
 } = require('./billing');
-const { requireActiveSubscription } = require('./auth');
+const { requireActiveSubscription, requirePdfAllowed } = require('./auth');
 const db = require('./db');
 const { saveReport, getReport, deleteReport, USE_S3 } = require('./storage');
 const { generateLandingPage } = require('./landing');
@@ -138,11 +142,13 @@ app.get('/api', (_req, res) => {
       'GET /report/:id': 'View a cached HTML report by ID',
       'GET /report/:id/pdf': 'Download white-label PDF report (optional ?agency=Name&agencyUrl=…)',
       'GET /health': 'Health check',
+      'POST /billing/trial': 'Start a 14-day free trial — returns { url } to Stripe checkout (CC required, not charged until trial ends)',
+      'GET /trial/status?key=…': 'Get trial usage: audits used, PDF exports used, days left',
       'POST /billing/checkout': 'Subscribe at $29/month — returns { url } to Stripe checkout',
       'POST /billing/portal': 'Manage your subscription — Body: { apiKey }',
       'POST /billing/webhook': 'Stripe webhook endpoint (internal)',
     },
-    pricing: '$29/month · Unlimited audits · Cancel anytime',
+    pricing: '14-day free trial (CC required) · then $29/month · Cancel anytime',
     billingEnabled: !!process.env.STRIPE_SECRET_KEY,
   });
 });
@@ -205,6 +211,98 @@ app.post('/billing/checkout', async (req, res) => {
     console.error('[billing/checkout error]', err);
     return res.status(500).json({ error: 'Could not create checkout session', detail: err.message });
   }
+});
+
+/**
+ * POST /billing/trial
+ * Body: { email? }
+ * Starts a 14-day free trial — requires CC via Stripe Checkout (not charged until trial ends).
+ * Returns { url, sessionId } — redirect the browser to Stripe.
+ */
+app.post('/billing/trial', async (req, res) => {
+  try {
+    const { email } = req.body || {};
+    const base = process.env.APP_URL || `http://localhost:${PORT}`;
+    const { url, sessionId } = await createTrialCheckoutSession({
+      email: email || undefined,
+      successUrl: `${base}/billing/trial/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancelUrl:  `${base}/billing/cancel`,
+    });
+    return res.json({ url, sessionId });
+  } catch (err) {
+    console.error('[billing/trial error]', err);
+    return res.status(500).json({ error: 'Could not create trial session', detail: err.message });
+  }
+});
+
+/**
+ * GET /billing/trial/success
+ * Landing page after a trial is started via Stripe Checkout.
+ */
+app.get('/billing/trial/success', (_req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>AuditBot — Trial Started</title>
+<style>body{font-family:system-ui,sans-serif;max-width:600px;margin:80px auto;padding:0 24px;color:#111}
+h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-size:1.1em}
+.trial-info{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:20px;margin:24px 0;}
+.trial-info ul{margin:8px 0 0 0;padding-left:20px;color:#15803d}</style>
+</head>
+<body>
+<h1>Your free trial is active!</h1>
+<div class="trial-info">
+  <strong>14-day free trial — no charge today</strong>
+  <ul>
+    <li>Up to 10 audits</li>
+    <li>Up to 3 PDF exports</li>
+    <li>Full SEO, performance &amp; accessibility checks</li>
+  </ul>
+</div>
+<p>Your API key will be sent to your email once the webhook confirms. Check your inbox.</p>
+<p>You won't be charged until your trial ends. Cancel anytime before then at no cost.</p>
+<p><a href="/">Back to AuditBot</a></p>
+${appPageAnalyticsSnippet('billing/trial/success')}
+${consentBannerSnippet()}
+</body></html>`);
+});
+
+/**
+ * GET /trial/status?key=<api-key>
+ * Returns trial usage info (audits used/limit, PDFs used/limit, days left).
+ * Works for trialing subscriptions only; returns null fields for paid.
+ */
+app.get('/trial/status', (req, res) => {
+  const apiKey = req.query.key;
+  if (!apiKey) return res.status(400).json({ error: 'Missing query param: key' });
+
+  const sub = lookupSubscription(apiKey);
+  if (!sub) return res.status(404).json({ error: 'API key not found' });
+
+  if (sub.status !== 'trialing') {
+    return res.json({
+      status: sub.status,
+      trial: null,
+    });
+  }
+
+  const trial = getTrialInfo(sub);
+  const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
+
+  return res.json({
+    status: sub.status,
+    trial: {
+      auditsUsed:   trial.auditsUsed,
+      auditsLimit:  TRIAL_AUDIT_LIMIT,
+      auditsLeft:   Math.max(0, TRIAL_AUDIT_LIMIT - trial.auditsUsed),
+      pdfsUsed:     trial.pdfsUsed,
+      pdfsLimit:    TRIAL_PDF_LIMIT,
+      pdfsLeft:     Math.max(0, TRIAL_PDF_LIMIT - trial.pdfsUsed),
+      daysLeft:     trial.daysLeft,
+      upgradeUrl:   `${appUrl}/billing/checkout`,
+      softWarning:  trial.auditsUsed >= TRIAL_AUDIT_LIMIT - 2, // warn at 8/10
+    },
+  });
 });
 
 /**
@@ -360,15 +458,30 @@ app.post('/audit', requireActiveSubscription, async (req, res) => {
     }
 
     if (format === 'pdf') {
+      // Enforce trial PDF limit
+      const sub = req.subscription;
+      if (sub?.status === 'trialing' && sub.pdfCount >= TRIAL_PDF_LIMIT) {
+        const appUrl = process.env.APP_URL || '';
+        return res.status(402).json({
+          error: 'Trial PDF limit reached',
+          detail: `You've used all ${TRIAL_PDF_LIMIT} trial PDF exports. Upgrade for unlimited exports.`,
+          pdfsUsed:   sub.pdfCount,
+          pdfsLimit:  TRIAL_PDF_LIMIT,
+          upgradeUrl: `${appUrl}/billing/checkout`,
+        });
+      }
       const { agency = '', agencyUrl = '' } = req.body || {};
       const pdfBuffer = await generatePdf(audit, { agencyName: agency, agencyUrl });
       const filename = `audit-${encodeURIComponent(targetUrl.replace(/https?:\/\//, ''))}.pdf`;
+      if (sub?.apiKey) db.incrementPdfCount(sub.apiKey);
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       return res.send(pdfBuffer);
     }
 
-    return res.json({ ...audit, reportUrl, pdfUrl: `${reportUrl}/pdf` });
+    // Include trial usage info in JSON response so clients can render a progress bar
+    const trialInfo = req.subscription ? getTrialInfo(req.subscription) : null;
+    return res.json({ ...audit, reportUrl, pdfUrl: `${reportUrl}/pdf`, trial: trialInfo });
   } catch (err) {
     console.error('[audit error]', err);
     return res.status(500).json({ error: 'Audit failed', detail: err.message });
@@ -396,8 +509,9 @@ app.get('/report/:id', async (req, res) => {
  * GET /report/:id/pdf
  * Downloads the cached report as a white-label PDF.
  * Optional query params: agency (name), agencyUrl
+ * Requires active subscription + trial PDF limit enforcement.
  */
-app.get('/report/:id/pdf', async (req, res) => {
+app.get('/report/:id/pdf', requireActiveSubscription, requirePdfAllowed, async (req, res) => {
   const meta = db.getReportMeta(req.params.id);
   if (!meta) {
     return res.status(404).json({ error: 'Report not found. Re-run the audit to generate a new one.' });
@@ -406,6 +520,7 @@ app.get('/report/:id/pdf', async (req, res) => {
     const { agency = '', agencyUrl = '' } = req.query;
     const pdfBuffer = await generatePdf(meta.audit, { agencyName: agency, agencyUrl });
     const safeUrl = meta.audit.url.replace(/https?:\/\//, '').replace(/[^a-z0-9.-]/gi, '-');
+    if (req.subscription?.apiKey) db.incrementPdfCount(req.subscription.apiKey);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="audit-${safeUrl}.pdf"`);
     trackServerEvent('pdf_export', {}, req).catch(() => {});

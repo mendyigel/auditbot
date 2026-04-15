@@ -42,12 +42,24 @@ db.exec(`
     customer_id     TEXT NOT NULL UNIQUE,
     subscription_id TEXT,
     status          TEXT NOT NULL DEFAULT 'incomplete',
-    created_at      INTEGER NOT NULL
+    created_at      INTEGER NOT NULL,
+    audit_count     INTEGER NOT NULL DEFAULT 0,
+    emails_sent     TEXT    NOT NULL DEFAULT '{}'
+  );
+
+  CREATE TABLE IF NOT EXISTS waitlist (
+    email      TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL
   );
 
   CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at);
   CREATE INDEX IF NOT EXISTS idx_subs_customer   ON subscriptions(customer_id);
 `);
+
+// Migrate: add columns if they don't exist (safe on first run after upgrade)
+try { db.exec(`ALTER TABLE subscriptions ADD COLUMN audit_count  INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
+try { db.exec(`ALTER TABLE subscriptions ADD COLUMN emails_sent  TEXT    NOT NULL DEFAULT '{}'`); } catch (_) {}
+try { db.exec(`ALTER TABLE subscriptions ADD COLUMN pdf_count    INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
 
 // ── Report helpers ─────────────────────────────────────────────────────────────
 
@@ -59,6 +71,11 @@ const stmts = {
   getReport: db.prepare(`SELECT * FROM reports WHERE id = ?`),
   deleteReport: db.prepare(`DELETE FROM reports WHERE id = ?`),
   pruneReports: db.prepare(`DELETE FROM reports WHERE created_at < ?`),
+
+  // Waitlist
+  insertWaitlist: db.prepare(
+    `INSERT OR IGNORE INTO waitlist (email, created_at) VALUES (?, ?)`
+  ),
 
   // Subscriptions
   upsertSubscription: db.prepare(`
@@ -75,6 +92,18 @@ const stmts = {
   updateSubStatus:   db.prepare(
     `UPDATE subscriptions SET status = @status, subscription_id = COALESCE(@subscription_id, subscription_id)
      WHERE customer_id = @customer_id`
+  ),
+  incrAuditCount: db.prepare(
+    `UPDATE subscriptions SET audit_count = audit_count + 1 WHERE api_key = ?`
+  ),
+  incrPdfCount: db.prepare(
+    `UPDATE subscriptions SET pdf_count = pdf_count + 1 WHERE api_key = ?`
+  ),
+  getSubsDueTrialEmail: db.prepare(
+    `SELECT * FROM subscriptions WHERE status IN ('active', 'trialing', 'incomplete') AND created_at < ?`
+  ),
+  updateEmailsSent: db.prepare(
+    `UPDATE subscriptions SET emails_sent = ? WHERE api_key = ?`
   ),
 };
 
@@ -110,6 +139,13 @@ function deleteReportMeta(id) {
 function pruneOldReports(maxAgeMs) {
   const cutoff = Date.now() - maxAgeMs;
   stmts.pruneReports.run(cutoff);
+}
+
+// ── Waitlist API ───────────────────────────────────────────────────────────────
+
+/** Store an email in the waitlist. Silently ignores duplicate emails. */
+function saveWaitlistEmail(email) {
+  stmts.insertWaitlist.run(email, Date.now());
 }
 
 // ── Subscriptions API ──────────────────────────────────────────────────────────
@@ -149,16 +185,57 @@ function rowToSub(row) {
     subscriptionId: row.subscription_id,
     status:         row.status,
     createdAt:      row.created_at,
+    auditCount:     row.audit_count || 0,
+    pdfCount:       row.pdf_count || 0,
+    emailsSent:     JSON.parse(row.emails_sent || '{}'),
   };
 }
 
+/** Increment audit count for a given API key. */
+function incrementAuditCount(apiKey) {
+  stmts.incrAuditCount.run(apiKey);
+}
+
+/** Increment PDF export count for a given API key. */
+function incrementPdfCount(apiKey) {
+  stmts.incrPdfCount.run(apiKey);
+}
+
+/**
+ * Return subscriptions created before `beforeMs` that may need trial emails.
+ * Caller filters by which emails have already been sent.
+ */
+function getSubscriptionsForTrialEmails(beforeMs) {
+  return stmts.getSubsDueTrialEmail.all(beforeMs).map(rowToSub);
+}
+
+/** Mark one or more email keys as sent for a given API key. */
+function markEmailSent(apiKey, emailKey) {
+  const sub = stmts.getSubByApiKey.get(apiKey);
+  if (!sub) return;
+  const flags = JSON.parse(sub.emails_sent || '{}');
+  flags[emailKey] = Date.now();
+  stmts.updateEmailsSent.run(JSON.stringify(flags), apiKey);
+}
+
+/** Cheap liveness check — throws if the DB connection is broken. */
+function ping() {
+  db.prepare('SELECT 1').get();
+}
+
 module.exports = {
+  ping,
   saveReportMeta,
   getReportMeta,
   deleteReportMeta,
   pruneOldReports,
+  saveWaitlistEmail,
   upsertSubscription,
   getSubscriptionByApiKey,
   getSubscriptionByCustomerId,
   updateSubscriptionStatus,
+  incrementAuditCount,
+  incrementPdfCount,
+  getSubscriptionsForTrialEmails,
+  markEmailSent,
 };
