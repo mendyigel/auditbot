@@ -221,6 +221,133 @@ app.get('/health', (_req, res) => {
   res.status(allOk ? 200 : 503).json(payload);
 });
 
+// ── Sign-in page ──────────────────────────────────────────────────────────────
+
+/**
+ * GET /signin
+ * Page where existing users enter their API key to view subscription status
+ * and manage their account via Stripe portal.
+ */
+app.get('/signin', (_req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign In — OrbioLabs</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --brand: #3b82f6; --brand-dark: #2563eb; --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #f1f5f9; --muted: #94a3b8; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+    a { color: var(--brand); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 40px; border-bottom: 1px solid var(--border); }
+    .logo { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.5px; color: var(--text); }
+    .logo span { color: var(--brand); }
+    .signin-container { max-width: 440px; margin: 80px auto; padding: 0 24px; }
+    h1 { font-size: 1.75rem; font-weight: 800; margin-bottom: 8px; }
+    .subtitle { color: var(--muted); margin-bottom: 32px; }
+    label { display: block; font-size: 0.875rem; font-weight: 600; margin-bottom: 8px; }
+    input[type="text"] {
+      width: 100%; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text); font-size: 1rem; outline: none; margin-bottom: 16px;
+    }
+    input[type="text"]:focus { border-color: var(--brand); }
+    input[type="text"]::placeholder { color: var(--muted); }
+    .btn { display: block; width: 100%; padding: 14px; background: var(--brand); color: #fff; border: none; border-radius: 8px; font-size: 1rem; font-weight: 700; cursor: pointer; }
+    .btn:hover { background: var(--brand-dark); }
+    .btn:disabled { opacity: 0.6; cursor: default; }
+    #signin-error { display: none; margin-top: 12px; font-size: 0.9rem; color: #f87171; font-weight: 600; }
+    #signin-result { display: none; margin-top: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+    #signin-result h2 { font-size: 1.125rem; font-weight: 700; margin-bottom: 16px; }
+    .status-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+    .status-row:last-child { border: none; }
+    .status-label { color: var(--muted); }
+    .status-value { font-weight: 600; }
+    .portal-link { display: block; width: 100%; text-align: center; padding: 12px; background: var(--brand); color: #fff; border-radius: 8px; font-weight: 700; margin-top: 20px; }
+    .portal-link:hover { background: var(--brand-dark); text-decoration: none; }
+    .signup-note { text-align: center; margin-top: 24px; color: var(--muted); font-size: 0.875rem; }
+  </style>
+</head>
+<body>
+<nav>
+  <a href="/" style="text-decoration:none"><div class="logo">Orbio<span>Labs</span></div></a>
+  <a href="#pricing" style="background:var(--brand);color:#fff;padding:8px 20px;border-radius:6px;font-weight:600;font-size:0.875rem;">Start free trial</a>
+</nav>
+<div class="signin-container">
+  <h1>Sign in</h1>
+  <p class="subtitle">Enter your API key to view your subscription and manage your account.</p>
+  <form id="signin-form" novalidate>
+    <label for="api-key">API Key</label>
+    <input type="text" id="api-key" name="key" placeholder="obl_xxxxxxxxxxxxxxxx" required autocomplete="off" />
+    <button type="submit" class="btn" id="signin-btn">Sign in</button>
+  </form>
+  <div id="signin-error"></div>
+  <div id="signin-result">
+    <h2>Your Subscription</h2>
+    <div id="status-rows"></div>
+    <a id="portal-btn" href="#" class="portal-link">Manage subscription</a>
+  </div>
+  <div class="signup-note">Don't have an account? <a href="/#pricing">Start a free trial</a></div>
+</div>
+<script>
+(function () {
+  var form = document.getElementById('signin-form');
+  var btn = document.getElementById('signin-btn');
+  var errEl = document.getElementById('signin-error');
+  var resultEl = document.getElementById('signin-result');
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var key = document.getElementById('api-key').value.trim();
+    if (!key) return;
+    btn.disabled = true;
+    btn.textContent = 'Checking…';
+    errEl.style.display = 'none';
+    resultEl.style.display = 'none';
+
+    fetch('/trial/status?key=' + encodeURIComponent(key))
+      .then(function (r) {
+        if (!r.ok) return r.json().then(function (d) { return Promise.reject(d); });
+        return r.json();
+      })
+      .then(function (data) {
+        btn.disabled = false;
+        btn.textContent = 'Sign in';
+        var rows = '';
+        rows += '<div class="status-row"><span class="status-label">Status</span><span class="status-value">' + data.status + '</span></div>';
+        if (data.plan) {
+          rows += '<div class="status-row"><span class="status-label">Plan</span><span class="status-value">' + (data.plan.name || data.plan.tier) + '</span></div>';
+        }
+        if (data.trial) {
+          rows += '<div class="status-row"><span class="status-label">Audits used</span><span class="status-value">' + data.trial.auditsUsed + ' / ' + data.trial.auditsLimit + '</span></div>';
+          rows += '<div class="status-row"><span class="status-label">PDFs used</span><span class="status-value">' + data.trial.pdfsUsed + ' / ' + data.trial.pdfsLimit + '</span></div>';
+          rows += '<div class="status-row"><span class="status-label">Days left</span><span class="status-value">' + data.trial.daysLeft + '</span></div>';
+        } else if (data.plan) {
+          var used = data.plan.monthlyAuditsUsed != null ? data.plan.monthlyAuditsUsed : '—';
+          var limit = data.plan.monthlyAuditsLimit || '—';
+          rows += '<div class="status-row"><span class="status-label">Monthly audits</span><span class="status-value">' + used + ' / ' + limit + '</span></div>';
+        }
+        document.getElementById('status-rows').innerHTML = rows;
+        document.getElementById('portal-btn').href = '/billing/portal?key=' + encodeURIComponent(key);
+        resultEl.style.display = 'block';
+      })
+      .catch(function (err) {
+        btn.disabled = false;
+        btn.textContent = 'Sign in';
+        errEl.textContent = (err && err.error) ? err.error : 'Could not find that API key. Please check and try again.';
+        errEl.style.display = 'block';
+      });
+  });
+})();
+</script>
+${appPageAnalyticsSnippet('signin')}
+${consentBannerSnippet()}
+</body>
+</html>`);
+});
+
 // ── Billing routes ────────────────────────────────────────────────────────────
 
 /**

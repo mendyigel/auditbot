@@ -525,7 +525,7 @@ function generateLandingPage() {
 <nav>
   <div class="logo">Orbio<span>Labs</span></div>
   <div>
-    <a href="/billing/checkout" class="cta-nav-secondary">Sign in</a>
+    <a href="/signin" class="cta-nav-secondary">Sign in</a>
     <a href="#pricing" class="cta-nav">Start free trial</a>
   </div>
 </nav>
