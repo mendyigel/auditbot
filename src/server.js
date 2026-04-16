@@ -15,6 +15,7 @@ const {
   createPortalSession,
   lookupSubscription,
   getTrialInfo,
+  fulfillCheckoutSession,
   TRIAL_AUDIT_LIMIT,
   TRIAL_PDF_LIMIT,
   PLANS,
@@ -278,13 +279,22 @@ app.post('/billing/trial', async (req, res) => {
  * GET /billing/trial/success
  * Landing page after a trial is started via Stripe Checkout.
  */
-app.get('/billing/trial/success', (_req, res) => {
+app.get('/billing/trial/success', async (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  let apiKeyHtml = '<p>Your API key will be sent to your email shortly. Check your inbox.</p>';
+  try {
+    const result = await fulfillCheckoutSession(req.query.session_id);
+    if (result && result.apiKey) {
+      apiKeyHtml = `<p>Your API key:</p><p><code>${result.apiKey}</code></p><p>Save this key — you'll need it to authenticate API requests. A copy has also been sent to your email.</p>`;
+    }
+  } catch (err) {
+    console.error('[billing/trial/success] session retrieval failed:', err.message);
+  }
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><title>OrbioLabs — Trial Started</title>
 <style>body{font-family:system-ui,sans-serif;max-width:600px;margin:80px auto;padding:0 24px;color:#111}
-h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-size:1.1em}
+h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-size:1.1em;word-break:break-all}
 .trial-info{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:20px;margin:24px 0;}
 .trial-info ul{margin:8px 0 0 0;padding-left:20px;color:#15803d}</style>
 </head>
@@ -298,7 +308,7 @@ h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-
     <li>Full SEO, performance &amp; accessibility checks</li>
   </ul>
 </div>
-<p>Your API key will be sent to your email once the webhook confirms. Check your inbox.</p>
+${apiKeyHtml}
 <p>You won't be charged until your trial ends. Cancel anytime before then at no cost.</p>
 <p><a href="/">Back to OrbioLabs</a></p>
 ${appPageAnalyticsSnippet('billing/trial/success')}
@@ -361,18 +371,27 @@ app.get('/trial/status', (req, res) => {
  * Landing page after successful Stripe checkout.
  * Retrieves (or creates) the API key for the new customer and displays it.
  */
-app.get('/billing/success', (_req, res) => {
+app.get('/billing/success', async (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  let apiKeyHtml = '<p>Your API key will be sent to your email shortly.</p>';
+  try {
+    const result = await fulfillCheckoutSession(req.query.session_id);
+    if (result && result.apiKey) {
+      apiKeyHtml = `<p>Your API key:</p><p><code>${result.apiKey}</code></p><p>Save this key — you'll need it to authenticate API requests. A copy has also been sent to your email.</p>`;
+    }
+  } catch (err) {
+    console.error('[billing/success] session retrieval failed:', err.message);
+  }
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><title>OrbioLabs — Subscription Active</title>
 <style>body{font-family:system-ui,sans-serif;max-width:600px;margin:80px auto;padding:0 24px;color:#111}
-h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-size:1.1em}</style>
+h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-size:1.1em;word-break:break-all}</style>
 </head>
 <body>
 <h1>You're all set!</h1>
-<p>Your subscription is active. Your API key will be sent to your email once the webhook confirms payment.</p>
-<p>If you need your key immediately, check your inbox or contact support.</p>
+<p>Your subscription is active.</p>
+${apiKeyHtml}
 <p><a href="/">Back to OrbioLabs</a></p>
 ${appPageAnalyticsSnippet('billing/success')}
 ${consentBannerSnippet()}

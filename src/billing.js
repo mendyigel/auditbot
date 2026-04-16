@@ -49,7 +49,9 @@ function getOrCreateApiKeyForCustomer(customerId, email) {
 
   const apiKey = generateApiKey();
   db.upsertSubscription({ apiKey, email, customerId, status: 'incomplete' });
-  return apiKey;
+  // Re-read to return the actual stored key (upsert may have kept an existing one)
+  const saved = db.getSubscriptionByCustomerId(customerId);
+  return saved ? saved.apiKey : apiKey;
 }
 
 /** Returns the subscription record for a given API key, or null. */
@@ -286,6 +288,43 @@ async function createPortalSession({ customerId, returnUrl }) {
   return { url: session.url };
 }
 
+/**
+ * Retrieve a completed Stripe Checkout session and ensure the account exists locally.
+ * Returns { apiKey, email, customerId } or null if session is not complete.
+ */
+async function fulfillCheckoutSession(sessionId) {
+  if (!sessionId) return null;
+  const stripe = getStripe();
+  const session = await stripe.checkout.sessions.retrieve(sessionId);
+  if (!session || session.payment_status === 'unpaid') return null;
+  if (session.mode !== 'subscription') return null;
+
+  const customerId = session.customer;
+  const customerEmail = session.customer_details?.email || session.customer_email || '';
+  if (!customerId) return null;
+
+  const apiKey = getOrCreateApiKeyForCustomer(customerId, customerEmail);
+  // Activate the subscription if checkout is complete
+  if (session.payment_status === 'paid' || session.status === 'complete') {
+    db.updateSubscriptionStatus({
+      customerId,
+      status: 'active',
+      subscriptionId: session.subscription || null,
+    });
+    // Set plan tier
+    let tier = 'pro';
+    try {
+      if (session.subscription) {
+        const stripeSub = await stripe.subscriptions.retrieve(session.subscription);
+        tier = stripeSub.metadata?.plan_tier || getTierFromPriceId(stripeSub.items?.data?.[0]?.price?.id) || 'pro';
+      }
+    } catch (_) {}
+    db.updatePlanTier(customerId, tier);
+  }
+
+  return { apiKey, email: customerEmail, customerId };
+}
+
 module.exports = {
   lookupSubscription,
   isActive,
@@ -298,4 +337,5 @@ module.exports = {
   createTrialCheckoutSession,
   handleWebhook,
   createPortalSession,
+  fulfillCheckoutSession,
 };

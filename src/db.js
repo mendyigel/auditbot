@@ -84,10 +84,9 @@ const stmts = {
   upsertSubscription: db.prepare(`
     INSERT INTO subscriptions (api_key, email, customer_id, subscription_id, status, created_at)
     VALUES (@api_key, @email, @customer_id, @subscription_id, @status, @created_at)
-    ON CONFLICT(api_key) DO UPDATE SET
+    ON CONFLICT(customer_id) DO UPDATE SET
       email           = excluded.email,
-      customer_id     = excluded.customer_id,
-      subscription_id = excluded.subscription_id,
+      subscription_id = COALESCE(excluded.subscription_id, subscriptions.subscription_id),
       status          = excluded.status
   `),
   getSubByApiKey:    db.prepare(`SELECT * FROM subscriptions WHERE api_key = ?`),
