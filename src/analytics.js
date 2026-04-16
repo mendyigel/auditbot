@@ -7,7 +7,7 @@
  * under most interpretations, but we respect the existing consent banner).
  *
  * Required env vars:
- *   PLAUSIBLE_DOMAIN   — e.g. "orbiolabs.com" (omit to disable analytics)
+ *   PLAUSIBLE_DOMAIN   — e.g. "orbiolab.com" (omit to disable analytics)
  *
  * Optional env vars:
  *   PLAUSIBLE_API_HOST — default "https://plausible.io" (override for self-hosted)

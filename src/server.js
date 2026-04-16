@@ -104,7 +104,7 @@ console.log(`[storage] Using ${USE_S3 ? 'S3 (bucket: ' + process.env.S3_BUCKET +
 
 /**
  * GET /
- * orbiolabs.com landing page with email waitlist capture
+ * orbiolab.com landing page with email waitlist capture
  */
 app.get('/', (_req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');

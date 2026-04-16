@@ -4,7 +4,7 @@ const { consentBannerSnippet } = require('./consent-banner');
 const { landingAnalyticsSnippet } = require('./analytics');
 
 /**
- * Generates the full orbiolabs.com landing page HTML.
+ * Generates the full orbiolab.com landing page HTML.
  * Includes email capture / waitlist form and GDPR consent banner.
  */
 function generateLandingPage() {
@@ -424,7 +424,7 @@ function generateLandingPage() {
 
 <!-- ── Footer ─────────────────────────────────────────────────────────────── -->
 <footer>
-  <p>&copy; 2026 Orbio Labs &mdash; <a href="/privacy">Privacy policy</a> &mdash; <a href="mailto:hello@orbiolabs.com">hello@orbiolabs.com</a></p>
+  <p>&copy; 2026 Orbio Labs &mdash; <a href="/privacy">Privacy policy</a> &mdash; <a href="mailto:hello@orbiolab.com">hello@orbiolab.com</a></p>
 </footer>
 
 <!-- ── Trial form JS ────────────────────────────────────────────────────────── -->
