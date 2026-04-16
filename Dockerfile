@@ -5,6 +5,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 FROM node:20-alpine
+RUN apk add --no-cache libstdc++
 WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules
 COPY . .
