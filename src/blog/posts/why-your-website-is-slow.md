@@ -75,7 +75,7 @@ Custom fonts are a common cause of layout shift and flash of unstyled text (FOUT
 
 ## Step-by-Step: How to Run a Free Performance Audit
 
-1. **Use AuditBot** — Enter your URL and get Core Web Vitals scores, performance recommendations, and a prioritized list of issues in seconds.
+1. **Use OrbioLabs** — Enter your URL and get Core Web Vitals scores, performance recommendations, and a prioritized list of issues in seconds.
 2. **Google PageSpeed Insights** — Enter your URL for lab data and field data (real user measurements from the Chrome User Experience Report).
 3. **WebPageTest** — More detailed waterfall diagrams showing exactly what's loading and when.
 4. **Chrome DevTools** — Open the Performance tab to record and analyze exactly what's happening during page load.
@@ -89,4 +89,4 @@ The numbers are compelling:
 
 The cost of not fixing your performance issues isn't hypothetical — it's measurable in lost revenue, higher bounce rates, and lower search rankings.
 
-Start by understanding where you stand. Run a free audit with AuditBot and get a clear picture of what's costing you.
+Start by understanding where you stand. Run a free audit with OrbioLabs and get a clear picture of what's costing you.

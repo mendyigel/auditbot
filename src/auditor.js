@@ -21,7 +21,7 @@ async function auditUrl(url, options = {}) {
       redirect: 'follow',
       headers: {
         'User-Agent':
-          'AuditBot/1.0 (+https://auditbot.io/bot) Mozilla/5.0 compatible',
+          'OrbioLabs/1.0 (+https://orbiolab.com/bot) Mozilla/5.0 compatible',
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       },
     });

@@ -36,7 +36,7 @@ function requireActiveSubscription(req, res, next) {
   if (!apiKey) {
     return res.status(401).json({
       error: 'Unauthorized',
-      detail: 'Include your AuditBot API key as: Authorization: Bearer <your-api-key>',
+      detail: 'Include your OrbioLabs API key as: Authorization: Bearer <your-api-key>',
       trialUrl:    (process.env.APP_URL || '') + '/billing/trial',
       subscribeUrl: (process.env.APP_URL || '') + '/billing/checkout',
     });

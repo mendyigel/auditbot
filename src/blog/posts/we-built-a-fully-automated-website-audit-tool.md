@@ -25,7 +25,7 @@ The result? Audits happen rarely, if at all. Problems go unfixed. Websites quiet
 
 ## What OrbioLabs Does Differently
 
-AuditBot combines **SEO analysis, performance metrics, and accessibility checks** into a single automated report you can generate in seconds.
+OrbioLabs combines **SEO analysis, performance metrics, and accessibility checks** into a single automated report you can generate in seconds.
 
 Enter a URL. Get a complete audit. Share the link with your client or team.
 
@@ -41,7 +41,7 @@ That's it.
 
 ## Who It's Built For
 
-AuditBot is designed for three types of people:
+OrbioLabs is designed for three types of people:
 
 1. **Web agencies and freelancers** who audit client sites regularly and need fast, professional reports they can hand over or white-label.
 2. **In-house SEO and performance teams** who want to monitor their own properties without enterprise price tags.
@@ -51,6 +51,6 @@ If you've ever wanted to hand a client a clear, actionable report within minutes
 
 ## Try Your First Audit Free
 
-We offer a **14-day free trial** (credit card required, no charge until the trial ends). You get up to 10 audits and 3 PDF exports — enough to see exactly what AuditBot can do for your workflow.
+We offer a **14-day free trial** (credit card required, no charge until the trial ends). You get up to 10 audits and 3 PDF exports — enough to see exactly what OrbioLabs can do for your workflow.
 
 Start your trial and audit your first site today. We think you'll like what you see.

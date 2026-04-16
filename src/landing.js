@@ -13,8 +13,8 @@ function generateLandingPage() {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="AuditBot — Automated SEO, performance &amp; accessibility audits. Get actionable reports for any website in seconds." />
-  <title>AuditBot by Orbio Labs — Automated Website Audits</title>
+  <meta name="description" content="OrbioLabs — Automated SEO, performance &amp; accessibility audits. Get actionable reports for any website in seconds." />
+  <title>OrbioLabs — Automated Website Audits</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -477,7 +477,7 @@ function generateLandingPage() {
 <section class="hero" id="audit-section">
   <div class="badge">Try it free · No signup required</div>
   <h1>Automated audits for <em>SEO, performance &amp; accessibility</em></h1>
-  <p>AuditBot scans any URL and delivers actionable, white-label reports in seconds. Built for agencies, freelancers, and dev teams.</p>
+  <p>OrbioLabs scans any URL and delivers actionable, white-label reports in seconds. Built for agencies, freelancers, and dev teams.</p>
 
   <form id="audit-form" novalidate>
     <input type="url" name="url" placeholder="https://example.com" required autocomplete="url" />
@@ -542,7 +542,7 @@ function generateLandingPage() {
     <div class="feature-card">
       <div class="icon">🤖</div>
       <h3>API-first</h3>
-      <p>Integrate AuditBot into your CI/CD pipeline or internal tools. Simple REST API with JSON responses.</p>
+      <p>Integrate OrbioLabs into your CI/CD pipeline or internal tools. Simple REST API with JSON responses.</p>
     </div>
   </div>
 </section>

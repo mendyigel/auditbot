@@ -159,9 +159,9 @@ app.post('/waitlist', express.json(), (req, res) => {
  */
 app.get('/api', (_req, res) => {
   res.json({
-    service: 'AuditBot',
+    service: 'OrbioLabs Audit API',
     version: '1.0.0',
-    description: 'Automated SEO, performance & accessibility audits with shareable HTML reports',
+    description: 'OrbioLabs — Automated SEO, performance & accessibility audits with shareable HTML reports',
     endpoints: {
       'POST /audit': 'Run an audit (requires API key). Body: { url, format? } — format: json|html|pdf',
       'GET /audit?url=…': 'Browser-friendly audit (requires API key)',
@@ -269,7 +269,7 @@ app.get('/billing/trial/success', (_req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>AuditBot — Trial Started</title>
+<head><meta charset="UTF-8"><title>OrbioLabs — Trial Started</title>
 <style>body{font-family:system-ui,sans-serif;max-width:600px;margin:80px auto;padding:0 24px;color:#111}
 h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-size:1.1em}
 .trial-info{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:20px;margin:24px 0;}
@@ -287,7 +287,7 @@ h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-
 </div>
 <p>Your API key will be sent to your email once the webhook confirms. Check your inbox.</p>
 <p>You won't be charged until your trial ends. Cancel anytime before then at no cost.</p>
-<p><a href="/">Back to AuditBot</a></p>
+<p><a href="/">Back to OrbioLabs</a></p>
 ${appPageAnalyticsSnippet('billing/trial/success')}
 ${consentBannerSnippet()}
 </body></html>`);
@@ -340,7 +340,7 @@ app.get('/billing/success', (_req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>AuditBot — Subscription Active</title>
+<head><meta charset="UTF-8"><title>OrbioLabs — Subscription Active</title>
 <style>body{font-family:system-ui,sans-serif;max-width:600px;margin:80px auto;padding:0 24px;color:#111}
 h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-size:1.1em}</style>
 </head>
@@ -348,7 +348,7 @@ h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-
 <h1>You're all set!</h1>
 <p>Your subscription is active. Your API key will be sent to your email once the webhook confirms payment.</p>
 <p>If you need your key immediately, check your inbox or contact support.</p>
-<p><a href="/">Back to AuditBot</a></p>
+<p><a href="/">Back to OrbioLabs</a></p>
 ${appPageAnalyticsSnippet('billing/success')}
 ${consentBannerSnippet()}
 </body></html>`);
@@ -362,7 +362,7 @@ app.get('/billing/cancel', (_req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>AuditBot — Checkout Cancelled</title>
+<head><meta charset="UTF-8"><title>OrbioLabs — Checkout Cancelled</title>
 <style>body{font-family:system-ui,sans-serif;max-width:600px;margin:80px auto;padding:0 24px;color:#111}</style>
 </head>
 <body>
@@ -647,7 +647,7 @@ if (process.env.SENTRY_DSN) {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`AuditBot running on http://localhost:${PORT}`);
+  console.log(`OrbioLabs running on http://localhost:${PORT}`);
   console.log(`Try: curl -X POST http://localhost:${PORT}/audit -H 'Content-Type: application/json' -d '{"url":"https://example.com"}'`);
 });
 

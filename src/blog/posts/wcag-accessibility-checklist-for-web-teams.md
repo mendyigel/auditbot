@@ -46,7 +46,7 @@ WCAG organizes requirements into four principles, abbreviated POUR:
 
 ## Top 10 Accessibility Failures on Real Websites
 
-Based on the WebAIM Million annual study and AuditBot's own scan data, these are the most common failures:
+Based on the WebAIM Million annual study and OrbioLabs's own scan data, these are the most common failures:
 
 ### 1. Low Color Contrast
 
@@ -90,7 +90,7 @@ PDFs are frequently used for reports, menus, and documentation but are rarely ma
 
 ## What Automated Tools Can and Can't Catch
 
-Automated accessibility scanners like AuditBot can reliably detect:
+Automated accessibility scanners like OrbioLabs can reliably detect:
 
 - Images without alt attributes
 - Color contrast failures
@@ -110,7 +110,7 @@ Automation typically catches **30–40% of WCAG failures**. The rest require man
 
 ## Run a Free Accessibility Check
 
-AuditBot runs automated WCAG 2.1 AA checks on any URL in seconds. You'll get a list of failures, their severity, and specific recommendations for each page element that needs fixing.
+OrbioLabs runs automated WCAG 2.1 AA checks on any URL in seconds. You'll get a list of failures, their severity, and specific recommendations for each page element that needs fixing.
 
 It won't catch everything — no automated tool will — but it's the fastest way to identify the most common issues and build your remediation backlog.
 

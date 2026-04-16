@@ -48,7 +48,7 @@ This is miles more effective than "we do SEO and web development." You've alread
 
 ## Delivering White-Label Reports to Clients
 
-AuditBot supports white-label PDF exports. You can generate a professional audit report branded with your agency name and URL — no mention of the underlying tool.
+OrbioLabs supports white-label PDF exports. You can generate a professional audit report branded with your agency name and URL — no mention of the underlying tool.
 
 This matters for two reasons:
 
@@ -71,7 +71,7 @@ Set a reminder to run audits on your top clients every quarter. Send the report 
 
 ## The Numbers
 
-At $29/month for AuditBot:
+At $29/month for OrbioLabs:
 - If you bill even one additional hour per month as a result of audit-identified work, you've paid for the tool
 - If you win one extra client per quarter because of the automated audit pitch approach, the ROI is 100x+
 - If you retain one client per year who would otherwise have churned, you've recovered the annual cost in one day

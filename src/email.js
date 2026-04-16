@@ -132,14 +132,14 @@ function tplWelcome({ apiKey }) {
     `&nbsp;&nbsp;-d '{"url":"https://yoursite.com"}'`;
 
   return {
-    subject: 'Your AuditBot API key is ready',
+    subject: 'Your OrbioLabs API key is ready',
     html: layout(`
       ${h1('Welcome to OrbioLabs')}
       ${p('Your subscription is active. Here&rsquo;s your API key &mdash; keep it safe:')}
       ${codeBlock(apiKey)}
       ${p('Run your first audit:')}
       <pre style="background:#0f172a;color:#e2e8f0;padding:16px;border-radius:6px;font-size:13px;overflow-x:auto;margin:0 0 24px;line-height:1.6;">${snippet}</pre>
-      ${p('AuditBot checks SEO, performance (Core Web Vitals), and accessibility &mdash; and returns a shareable report link in seconds.')}
+      ${p('OrbioLabs checks SEO, performance (Core Web Vitals), and accessibility &mdash; and returns a shareable report link in seconds.')}
       ${btn('View API Docs', `${APP_URL}/api`)}
       ${hr()}
       ${p('<strong>3 things to do first:</strong><br>1. Run an audit on your own site<br>2. Download the PDF report for a client<br>3. Share the report link &mdash; it works without any account')}
@@ -158,7 +158,7 @@ function tplTrialDay3() {
       ${p("You&rsquo;re 3 days in and we haven&rsquo;t seen an audit from you yet. Here&rsquo;s the fastest path to your first report:")}
       ${btn('Run an Audit Now', `${APP_URL}/`)}
       ${hr()}
-      <p style="margin:0 0 12px;font-size:15px;font-weight:600;color:${B.dark};">What AuditBot checks in &lt;30 seconds:</p>
+      <p style="margin:0 0 12px;font-size:15px;font-weight:600;color:${B.dark};">What OrbioLabs checks in &lt;30 seconds:</p>
       <table cellpadding="0" cellspacing="0" style="width:100%;margin:0 0 24px;">
         <tr><td style="padding:8px 0;border-bottom:1px solid #f3f4f6;">
           <span style="color:${B.success};font-weight:700;margin-right:8px;">&#10003;</span>
@@ -183,7 +183,7 @@ function tplTrialDay3() {
  */
 function tplTrialDay10() {
   return {
-    subject: '4 days left on your AuditBot trial',
+    subject: '4 days left on your OrbioLabs trial',
     html: layout(`
       ${h1('4 days left on your trial')}
       ${p('Your 14-day trial ends in 4 days. After that, your API key will stop working unless you upgrade.')}
@@ -200,10 +200,10 @@ function tplTrialDay10() {
  */
 function tplTrialDay13() {
   return {
-    subject: 'Last chance — your AuditBot trial expires tomorrow',
+    subject: 'Last chance — your OrbioLabs trial expires tomorrow',
     html: layout(`
       ${h1('Your trial ends tomorrow')}
-      ${p('This is your last reminder. Your AuditBot trial expires tomorrow. After that, your API key will stop working and past reports become read-only.')}
+      ${p('This is your last reminder. Your OrbioLabs trial expires tomorrow. After that, your API key will stop working and past reports become read-only.')}
       ${btn('Upgrade Before It Expires', `${APP_URL}/billing/checkout`)}
       ${hr()}
       ${p('Not ready to commit? Cancel anytime during the trial &mdash; no charge if you cancel before tomorrow.')}
@@ -217,10 +217,10 @@ function tplTrialDay13() {
  */
 function tplTrialExpired() {
   return {
-    subject: 'Your AuditBot trial has ended — reactivate now',
+    subject: 'Your OrbioLabs trial has ended — reactivate now',
     html: layout(`
       ${h1('Your trial has ended')}
-      ${p('Your 14-day AuditBot trial expired today. Your API key is now paused &mdash; past reports are still accessible for 30 days.')}
+      ${p('Your 14-day OrbioLabs trial expired today. Your API key is now paused &mdash; past reports are still accessible for 30 days.')}
       ${btn('Reactivate for $29/month', `${APP_URL}/billing/checkout`)}
       ${hr()}
       ${p('Reactivate and pick up exactly where you left off. Your report history and API key are restored immediately.')}
@@ -232,7 +232,7 @@ function tplTrialExpired() {
 /**
  * 6. Payment receipt — on Stripe subscription created.
  */
-function tplPaymentReceipt({ amount = '$29.00', plan = 'AuditBot Monthly' } = {}) {
+function tplPaymentReceipt({ amount = '$29.00', plan = 'OrbioLabs Monthly' } = {}) {
   const date = new Date().toLocaleDateString('en-US', {
     year: 'numeric', month: 'long', day: 'numeric',
   });
@@ -243,10 +243,10 @@ function tplPaymentReceipt({ amount = '$29.00', plan = 'AuditBot Monthly' } = {}
     </tr>`;
 
   return {
-    subject: 'Payment confirmed — AuditBot receipt',
+    subject: 'Payment confirmed — OrbioLabs receipt',
     html: layout(`
       ${h1('Payment confirmed')}
-      ${p('Thanks for subscribing to AuditBot.')}
+      ${p('Thanks for subscribing to OrbioLabs.')}
       <table cellpadding="0" cellspacing="0" style="width:100%;background:${B.offWhite};border-radius:6px;padding:4px 16px;margin:0 0 24px;">
         ${row('Plan', plan)}
         ${row('Amount', amount)}
@@ -263,15 +263,15 @@ function tplPaymentReceipt({ amount = '$29.00', plan = 'AuditBot Monthly' } = {}
  */
 function tplCancellation() {
   return {
-    subject: 'Your AuditBot subscription has been cancelled',
+    subject: 'Your OrbioLabs subscription has been cancelled',
     html: layout(`
       ${h1('Subscription cancelled')}
-      ${p("Your AuditBot subscription has been cancelled. You won&rsquo;t be charged again.")}
+      ${p("Your OrbioLabs subscription has been cancelled. You won&rsquo;t be charged again.")}
       ${p('Your access continues until the end of your current billing period. After that, your API key will stop working and your data will be retained for 30 days before deletion.')}
       ${hr()}
       ${p('Changed your mind? Resubscribe anytime &mdash; your report history will be restored.')}
       ${btn('Resubscribe', `${APP_URL}/billing/checkout`)}
-      ${p("Thanks for trying AuditBot. If there&rsquo;s anything we could have done better, reply to this email &mdash; we read every response.")}
+      ${p("Thanks for trying OrbioLabs. If there&rsquo;s anything we could have done better, reply to this email &mdash; we read every response.")}
     `),
   };
 }

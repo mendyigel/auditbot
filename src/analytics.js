@@ -153,7 +153,7 @@ async function trackServerEvent(eventName, props, req) {
 
   const appUrl  = process.env.APP_URL || 'https://' + PLAUSIBLE_DOMAIN;
   const pageUrl = appUrl + (req ? req.path : '/');
-  const ua      = (req && req.headers['user-agent']) || 'AuditBot/1.0';
+  const ua      = (req && req.headers['user-agent']) || 'OrbioLabs/1.0';
   const ip      = (req && (req.headers['x-forwarded-for'] || req.socket?.remoteAddress)) || '127.0.0.1';
 
   const body = {

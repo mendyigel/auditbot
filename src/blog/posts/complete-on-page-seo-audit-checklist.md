@@ -108,7 +108,7 @@ Not all issues are equal. Use this rough priority order:
 
 ## How to Automate This Process
 
-Running this checklist manually across a multi-page site takes hours. AuditBot automates the entire thing — enter your URL and get a prioritized report across all 12 areas in seconds.
+Running this checklist manually across a multi-page site takes hours. OrbioLabs automates the entire thing — enter your URL and get a prioritized report across all 12 areas in seconds.
 
 The report includes specific page-level recommendations so you know exactly what to fix, not just that something is broken.
 
