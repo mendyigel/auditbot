@@ -106,7 +106,139 @@ function generateLandingPage() {
       margin: 0 auto 40px;
     }
 
-    /* ── Waitlist form ──────────────────────────────────────────────────────── */
+    /* ── Audit form ─────────────────────────────────────────────────────────── */
+    #audit-form {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    #audit-form input[type="url"] {
+      flex: 1;
+      min-width: 240px;
+      max-width: 420px;
+      padding: 12px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 1rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    #audit-form input[type="url"]:focus { border-color: var(--brand); }
+    #audit-form input[type="url"]::placeholder { color: var(--muted); }
+    #audit-form button {
+      padding: 12px 28px;
+      background: var(--brand);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    #audit-form button:hover { background: var(--brand-dark); }
+    #audit-form button:disabled { opacity: 0.6; cursor: default; }
+    .audit-note {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    #audit-error {
+      display: none;
+      margin-top: 12px;
+      font-size: 0.9rem;
+      color: #f87171;
+      font-weight: 600;
+    }
+
+    /* ── Audit results ─────────────────────────────────────────────────────── */
+    #audit-results {
+      display: none;
+      max-width: 760px;
+      margin: 40px auto;
+      padding: 0 24px;
+    }
+    .results-header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    .results-header h2 {
+      font-size: 1.5rem;
+      font-weight: 800;
+      margin-bottom: 4px;
+    }
+    .results-header .audited-url {
+      color: var(--brand);
+      font-size: 0.9rem;
+      word-break: break-all;
+    }
+    .score-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+    .score-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      text-align: center;
+    }
+    .score-card .score-value {
+      font-size: 2.5rem;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .score-card .score-label {
+      font-size: 0.8rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 6px;
+    }
+    .score-good { color: #4ade80; }
+    .score-mid { color: #facc15; }
+    .score-bad { color: #f87171; }
+    .issues-section {
+      margin-bottom: 24px;
+    }
+    .issues-section h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .issue-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 0;
+      font-size: 0.875rem;
+      color: var(--muted);
+    }
+    .issue-icon { flex-shrink: 0; }
+    .issue-fail { color: #f87171; }
+    .issue-pass { color: #4ade80; }
+    .results-cta {
+      text-align: center;
+      margin-top: 32px;
+      padding: 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+    .results-cta p {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 16px;
+    }
+
+    /* ── Waitlist form (kept for compatibility) ────────────────────────────── */
     #waitlist {
       display: flex;
       gap: 10px;
@@ -342,18 +474,32 @@ function generateLandingPage() {
 </nav>
 
 <!-- ── Hero ───────────────────────────────────────────────────────────────── -->
-<section class="hero" id="trial-form-section">
-  <div class="badge">14-day free trial · No charge today</div>
+<section class="hero" id="audit-section">
+  <div class="badge">Try it free · No signup required</div>
   <h1>Automated audits for <em>SEO, performance &amp; accessibility</em></h1>
   <p>AuditBot scans any URL and delivers actionable, white-label reports in seconds. Built for agencies, freelancers, and dev teams.</p>
 
-  <form id="trial-form" novalidate>
-    <input type="email" name="email" placeholder="you@company.com" required autocomplete="email" />
-    <button type="submit" id="trial-btn">Start free trial</button>
+  <form id="audit-form" novalidate>
+    <input type="url" name="url" placeholder="https://example.com" required autocomplete="url" />
+    <button type="submit" id="audit-btn">Audit this site</button>
   </form>
-  <div class="waitlist-note">Credit card required &mdash; no charge for 14 days. Cancel anytime.</div>
-  <div id="trial-msg" style="display:none;margin-top:12px;font-size:0.95rem;color:#4ade80;font-weight:600;">Redirecting to secure checkout&hellip;</div>
+  <div class="audit-note">Free — up to 3 audits per hour. No account needed.</div>
+  <div id="audit-error"></div>
 </section>
+
+<!-- ── Audit results (populated by JS) ───────────────────────────────────── -->
+<div id="audit-results">
+  <div class="results-header">
+    <h2>Audit Results</h2>
+    <div class="audited-url" id="result-url"></div>
+  </div>
+  <div class="score-grid" id="score-grid"></div>
+  <div id="issues-container"></div>
+  <div class="results-cta">
+    <p>Want unlimited audits, PDF exports, and API access?</p>
+    <a href="#pricing" class="btn-trial">Start 14-day free trial — $0 today</a>
+  </div>
+</div>
 
 <!-- ── Trust bar ──────────────────────────────────────────────────────────── -->
 <div class="social-proof">Trusted by growing teams</div>
@@ -417,7 +563,7 @@ function generateLandingPage() {
       <li><span class="check">✓</span> Scheduled recurring audits</li>
       <li><span class="check">✓</span> Email support</li>
     </ul>
-    <a href="#trial-form-section" class="btn-trial" id="pricing-trial-btn">Start 14-day free trial</a>
+    <a href="#" class="btn-trial" id="pricing-trial-btn">Start 14-day free trial</a>
     <div class="trial-note">Credit card required &mdash; no charge for 14 days. Cancel before trial ends and pay nothing.</div>
   </div>
 </section>
@@ -427,53 +573,129 @@ function generateLandingPage() {
   <p>&copy; 2026 Orbio Labs &mdash; <a href="/privacy">Privacy policy</a> &mdash; <a href="mailto:hello@orbiolab.com">hello@orbiolab.com</a></p>
 </footer>
 
-<!-- ── Trial form JS ────────────────────────────────────────────────────────── -->
+<!-- ── Audit + Trial JS ─────────────────────────────────────────────────────── -->
 <script>
 (function () {
-  function startTrial(email) {
-    return fetch('/billing/trial', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: email || undefined })
-    }).then(function (r) { return r.ok ? r.json() : r.json().then(function (d) { return Promise.reject(d); }); });
+  // ── Free audit form ───────────────────────────────────────────────────────
+  var form = document.getElementById('audit-form');
+  var btn  = document.getElementById('audit-btn');
+  var errEl = document.getElementById('audit-error');
+  var resultsEl = document.getElementById('audit-results');
+
+  function scoreClass(s) {
+    if (s >= 80) return 'score-good';
+    if (s >= 50) return 'score-mid';
+    return 'score-bad';
   }
 
-  // Hero form
-  var form = document.getElementById('trial-form');
-  var btn  = document.getElementById('trial-btn');
-  var msg  = document.getElementById('trial-msg');
+  function renderResults(data) {
+    if (data.error && !data.scores) {
+      errEl.textContent = 'Could not audit: ' + data.error;
+      errEl.style.display = 'block';
+      return;
+    }
+
+    errEl.style.display = 'none';
+    document.getElementById('result-url').textContent = data.url;
+
+    var scores = data.scores;
+    var grid = document.getElementById('score-grid');
+    grid.innerHTML = [
+      { label: 'Overall', value: scores.overall },
+      { label: 'SEO', value: scores.seo },
+      { label: 'Performance', value: scores.performance },
+      { label: 'Accessibility', value: scores.accessibility }
+    ].map(function (s) {
+      return '<div class="score-card"><div class="score-value ' + scoreClass(s.value) + '">' + s.value + '</div><div class="score-label">' + s.label + '</div></div>';
+    }).join('');
+
+    var container = document.getElementById('issues-container');
+    var sections = [
+      { title: 'SEO', data: data.seo },
+      { title: 'Performance', data: data.performance },
+      { title: 'Accessibility', data: data.accessibility }
+    ];
+    container.innerHTML = sections.map(function (sec) {
+      var items = '';
+      if (sec.data.issues && sec.data.issues.length) {
+        items += sec.data.issues.map(function (i) {
+          return '<div class="issue-item"><span class="issue-icon issue-fail">&#10007;</span> ' + escHtml(i) + '</div>';
+        }).join('');
+      }
+      if (sec.data.passes && sec.data.passes.length) {
+        items += sec.data.passes.map(function (p) {
+          return '<div class="issue-item"><span class="issue-icon issue-pass">&#10003;</span> ' + escHtml(p) + '</div>';
+        }).join('');
+      }
+      return '<div class="issues-section"><h3>' + sec.title + ' (' + sec.data.score + '/100)</h3>' + items + '</div>';
+    }).join('');
+
+    resultsEl.style.display = 'block';
+    resultsEl.scrollIntoView({ behavior: 'smooth' });
+  }
+
+  function escHtml(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
   if (form) {
     form.addEventListener('submit', function (e) {
       e.preventDefault();
-      var email = form.elements['email'].value.trim();
-      if (!email) return;
+      var url = form.elements['url'].value.trim();
+      if (!url) return;
       btn.disabled = true;
-      btn.textContent = 'Starting trial…';
-      startTrial(email)
-        .then(function (data) {
-          msg.style.display = 'block';
-          document.dispatchEvent(new CustomEvent('trial:started'));
-          window.location.href = data.url;
-        })
-        .catch(function (err) {
-          btn.disabled = false;
-          btn.textContent = 'Start free trial';
-          alert((err && err.error) ? err.error : 'Something went wrong. Please try again.');
-        });
+      btn.textContent = 'Auditing…';
+      errEl.style.display = 'none';
+      resultsEl.style.display = 'none';
+
+      fetch('/audit/free', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url })
+      })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        btn.disabled = false;
+        btn.textContent = 'Audit this site';
+        if (data.error && !data.scores) {
+          errEl.textContent = data.detail || data.error;
+          errEl.style.display = 'block';
+          return;
+        }
+        renderResults(data);
+      })
+      .catch(function () {
+        btn.disabled = false;
+        btn.textContent = 'Audit this site';
+        errEl.textContent = 'Something went wrong. Please try again.';
+        errEl.style.display = 'block';
+      });
     });
   }
 
-  // Pricing CTA — scrolls to hero form and clicks
+  // ── Pricing CTA — starts trial via Stripe ─────────────────────────────────
   var pricingBtn = document.getElementById('pricing-trial-btn');
   if (pricingBtn) {
     pricingBtn.addEventListener('click', function (e) {
       e.preventDefault();
-      var section = document.getElementById('trial-form-section');
-      if (section) section.scrollIntoView({ behavior: 'smooth' });
-      setTimeout(function () {
-        var input = form && form.elements['email'];
-        if (input) input.focus();
-      }, 400);
+      var email = prompt('Enter your email to start a 14-day free trial:');
+      if (!email) return;
+      pricingBtn.textContent = 'Starting trial…';
+      fetch('/billing/trial', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email })
+      })
+      .then(function (r) { return r.ok ? r.json() : r.json().then(function (d) { return Promise.reject(d); }); })
+      .then(function (data) {
+        window.location.href = data.url;
+      })
+      .catch(function (err) {
+        pricingBtn.textContent = 'Start 14-day free trial';
+        alert((err && err.error) ? err.error : 'Something went wrong. Please try again.');
+      });
     });
   }
 })();

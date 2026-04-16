@@ -437,6 +437,64 @@ app.post('/billing/webhook', async (req, res) => {
   }
 });
 
+// ── Free audit (landing page demo — no auth, rate-limited) ───────────────────
+
+const freeAuditLimiter = { counts: new Map(), resetInterval: null };
+// Clean up stale entries every 10 minutes
+freeAuditLimiter.resetInterval = setInterval(() => {
+  const cutoff = Date.now() - 3600000;
+  for (const [ip, entry] of freeAuditLimiter.counts) {
+    if (entry.firstAt < cutoff) freeAuditLimiter.counts.delete(ip);
+  }
+}, 600000);
+
+/**
+ * POST /audit/free
+ * Body: { url: string }
+ * No auth required. Returns JSON audit results for the landing page demo.
+ * Rate-limited to 3 audits per IP per hour.
+ */
+app.post('/audit/free', async (req, res) => {
+  const { url } = req.body || {};
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'Missing required field: url' });
+  }
+
+  // Basic rate limiting by IP
+  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const entry = freeAuditLimiter.counts.get(ip) || { count: 0, firstAt: now };
+  if (now - entry.firstAt > 3600000) {
+    entry.count = 0;
+    entry.firstAt = now;
+  }
+  if (entry.count >= 3) {
+    return res.status(429).json({
+      error: 'Rate limit reached',
+      detail: 'Free audits are limited to 3 per hour. Start a free trial for unlimited audits.',
+      trialUrl: '/billing/trial',
+    });
+  }
+  entry.count++;
+  freeAuditLimiter.counts.set(ip, entry);
+
+  let targetUrl = url.trim();
+  if (!/^https?:\/\//i.test(targetUrl)) {
+    targetUrl = 'https://' + targetUrl;
+  }
+
+  try {
+    const audit = await auditUrl(targetUrl);
+
+    trackServerEvent('free_audit_run', {}, req).catch(() => {});
+
+    return res.json(audit);
+  } catch (err) {
+    console.error('[free audit error]', err);
+    return res.status(500).json({ error: 'Audit failed', detail: err.message });
+  }
+});
+
 // ── Audit routes (gated behind active subscription) ───────────────────────────
 
 /**
