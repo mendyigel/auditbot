@@ -3,7 +3,10 @@
 /**
  * Stripe billing module for AuditBot
  *
- * Subscription plan: $29/month
+ * Two-tier pricing:
+ *   Starter — $9/month  (5 audits/month, 1 site, standard reports)
+ *   Pro     — $29/month (unlimited audits, 10 sites, full features)
+ *
  * Flow:
  *   1. POST /billing/checkout  → create Stripe Checkout session, redirect to Stripe
  *   2. Stripe redirects to SUCCESS_URL with ?session_id=…
@@ -13,7 +16,9 @@
  * Required env vars:
  *   STRIPE_SECRET_KEY         — sk_live_… or sk_test_…
  *   STRIPE_WEBHOOK_SECRET     — whsec_… (from Stripe dashboard → Webhooks)
- *   STRIPE_PRICE_ID           — price_… for the $29/month product
+ *   STRIPE_STARTER_PRICE_ID   — price_… for the $9/month Starter product
+ *   STRIPE_PRO_PRICE_ID       — price_… for the $29/month Pro product
+ *   STRIPE_PRICE_ID           — (legacy fallback, mapped to Pro)
  *   APP_URL                   — public base URL (e.g. https://auditbot.up.railway.app)
  */
 
@@ -52,6 +57,45 @@ function lookupSubscription(apiKey) {
   return db.getSubscriptionByApiKey(apiKey);
 }
 
+// ── Plan definitions ──────────────────────────────────────────────────────────
+const PLANS = {
+  starter: {
+    name: 'Starter',
+    price: 9,
+    monthlyAudits: 5,
+    maxSites: 1,
+    pdfExport: false,
+    scheduledAudits: false,
+    whiteLabel: false,
+    priorityScanning: false,
+  },
+  pro: {
+    name: 'Pro',
+    price: 29,
+    monthlyAudits: Infinity,
+    maxSites: 10,
+    pdfExport: true,
+    scheduledAudits: true,
+    whiteLabel: true,
+    priorityScanning: true,
+  },
+};
+
+/** Resolve the Stripe price ID for a given tier. */
+function getPriceIdForTier(tier) {
+  if (tier === 'starter') {
+    return process.env.STRIPE_STARTER_PRICE_ID || null;
+  }
+  // Pro or fallback
+  return process.env.STRIPE_PRO_PRICE_ID || process.env.STRIPE_PRICE_ID || null;
+}
+
+/** Determine plan tier from a Stripe price ID. */
+function getTierFromPriceId(priceId) {
+  if (priceId && priceId === process.env.STRIPE_STARTER_PRICE_ID) return 'starter';
+  return 'pro';
+}
+
 // ── Trial constants ────────────────────────────────────────────────────────────
 const TRIAL_DAYS        = 14;
 const TRIAL_AUDIT_LIMIT = 10;
@@ -82,12 +126,13 @@ function getTrialInfo(sub) {
 
 /**
  * Create a Stripe Checkout Session for an immediate paid subscription.
+ * @param {string} tier - 'starter' or 'pro' (default: 'pro')
  * Returns { url } — redirect the browser to this URL.
  */
-async function createCheckoutSession({ email, successUrl, cancelUrl }) {
+async function createCheckoutSession({ email, successUrl, cancelUrl, tier = 'pro' }) {
   const stripe = getStripe();
-  const priceId = process.env.STRIPE_PRICE_ID;
-  if (!priceId) throw new Error('STRIPE_PRICE_ID is not set');
+  const priceId = getPriceIdForTier(tier);
+  if (!priceId) throw new Error(`Stripe price ID not set for tier: ${tier}`);
 
   const params = {
     mode: 'subscription',
@@ -96,6 +141,9 @@ async function createCheckoutSession({ email, successUrl, cancelUrl }) {
     cancel_url: cancelUrl,
     allow_promotion_codes: true,
     billing_address_collection: 'auto',
+    subscription_data: {
+      metadata: { plan_tier: tier },
+    },
   };
   if (email) params.customer_email = email;
 
@@ -106,12 +154,13 @@ async function createCheckoutSession({ email, successUrl, cancelUrl }) {
 /**
  * Create a Stripe Checkout Session with a 14-day free trial.
  * Collects a payment method but does NOT charge until trial ends.
+ * @param {string} tier - 'starter' or 'pro' (default: 'pro')
  * Returns { url, sessionId }.
  */
-async function createTrialCheckoutSession({ email, successUrl, cancelUrl }) {
+async function createTrialCheckoutSession({ email, successUrl, cancelUrl, tier = 'pro' }) {
   const stripe = getStripe();
-  const priceId = process.env.STRIPE_PRICE_ID;
-  if (!priceId) throw new Error('STRIPE_PRICE_ID is not set');
+  const priceId = getPriceIdForTier(tier);
+  if (!priceId) throw new Error(`Stripe price ID not set for tier: ${tier}`);
 
   const params = {
     mode: 'subscription',
@@ -122,7 +171,7 @@ async function createTrialCheckoutSession({ email, successUrl, cancelUrl }) {
     billing_address_collection: 'auto',
     subscription_data: {
       trial_period_days: TRIAL_DAYS,
-      metadata: { source: 'free_trial' },
+      metadata: { source: 'free_trial', plan_tier: tier },
     },
     payment_method_collection: 'always',
   };
@@ -163,9 +212,15 @@ async function handleWebhook(rawBody, signature) {
         status: 'active',
         subscriptionId: session.subscription,
       });
-      console.log('[stripe] checkout complete — customer:', customerId, '— apiKey:', apiKey);
+      // Determine plan tier from subscription metadata or price ID
+      let tier = 'pro';
+      try {
+        const stripeSub = await getStripe().subscriptions.retrieve(session.subscription);
+        tier = stripeSub.metadata?.plan_tier || getTierFromPriceId(stripeSub.items?.data?.[0]?.price?.id) || 'pro';
+      } catch (_) {}
+      db.updatePlanTier(customerId, tier);
+      console.log('[stripe] checkout complete — customer:', customerId, '— tier:', tier, '— apiKey:', apiKey);
       if (customerEmail) {
-        // Send welcome + payment receipt concurrently; don't await to avoid blocking webhook response
         Promise.all([
           email.sendWelcome(customerEmail, { apiKey }),
           email.sendPaymentReceipt(customerEmail),
@@ -181,6 +236,9 @@ async function handleWebhook(rawBody, signature) {
         status: subscription.status,
         subscriptionId: subscription.id,
       });
+      // Sync plan tier on upgrade/downgrade
+      const updatedTier = subscription.metadata?.plan_tier || getTierFromPriceId(subscription.items?.data?.[0]?.price?.id) || 'pro';
+      db.updatePlanTier(subscription.customer, updatedTier);
       break;
     }
 
@@ -235,6 +293,7 @@ module.exports = {
   TRIAL_AUDIT_LIMIT,
   TRIAL_PDF_LIMIT,
   TRIAL_DAYS,
+  PLANS,
   createCheckoutSession,
   createTrialCheckoutSession,
   handleWebhook,

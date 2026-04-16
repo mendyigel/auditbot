@@ -355,7 +355,7 @@ function generateLandingPage() {
 
     /* ── Pricing ────────────────────────────────────────────────────────────── */
     .pricing {
-      max-width: 480px;
+      max-width: 860px;
       margin: 80px auto;
       padding: 0 24px;
       text-align: center;
@@ -363,14 +363,53 @@ function generateLandingPage() {
     .pricing h2 {
       font-size: 1.875rem;
       font-weight: 800;
-      margin-bottom: 32px;
+      margin-bottom: 12px;
       letter-spacing: -0.5px;
+    }
+    .pricing .pricing-subtitle {
+      color: var(--muted);
+      font-size: 1rem;
+      margin-bottom: 40px;
+    }
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      align-items: start;
+    }
+    @media (max-width: 640px) {
+      .pricing-grid { grid-template-columns: 1fr; }
     }
     .price-card {
       background: var(--surface);
-      border: 1px solid var(--brand);
+      border: 1px solid var(--border);
       border-radius: 16px;
       padding: 40px 32px;
+      position: relative;
+    }
+    .price-card.featured {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 1px var(--brand);
+    }
+    .popular-badge {
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--brand);
+      color: #fff;
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 4px 16px;
+      border-radius: 99px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .plan-name {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: var(--muted);
     }
     .trial-badge {
       display: inline-block;
@@ -406,6 +445,7 @@ function generateLandingPage() {
     }
     .price-features li:last-child { border: none; }
     .price-features .check { color: #4ade80; font-weight: 700; }
+    .price-features .x-mark { color: #64748b; font-weight: 700; }
     .btn-trial {
       display: block;
       width: 100%;
@@ -423,6 +463,23 @@ function generateLandingPage() {
       margin-bottom: 12px;
     }
     .btn-trial:hover { background: var(--brand-dark); text-decoration: none; }
+    .btn-trial-outline {
+      display: block;
+      width: 100%;
+      padding: 14px;
+      background: transparent;
+      color: var(--brand);
+      border: 2px solid var(--brand);
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      text-align: center;
+      text-decoration: none;
+      margin-bottom: 12px;
+    }
+    .btn-trial-outline:hover { background: var(--brand); color: #fff; text-decoration: none; }
     .btn-subscribe {
       display: block;
       width: 100%;
@@ -549,22 +606,48 @@ function generateLandingPage() {
 
 <!-- ── Pricing ─────────────────────────────────────────────────────────────── -->
 <section class="pricing" id="pricing">
-  <h2>Simple, flat pricing</h2>
-  <div class="price-card">
-    <div class="trial-badge">14-day free trial</div>
-    <div class="price-amount"><span>$</span>29</div>
-    <div class="price-period">per month after trial &middot; cancel anytime</div>
-    <ul class="price-features">
-      <li><span class="check">✓</span> Unlimited audits</li>
-      <li><span class="check">✓</span> Full API access</li>
-      <li><span class="check">✓</span> White-label PDF reports</li>
-      <li><span class="check">✓</span> Shareable report links</li>
-      <li><span class="check">✓</span> 90-day report retention</li>
-      <li><span class="check">✓</span> Scheduled recurring audits</li>
-      <li><span class="check">✓</span> Email support</li>
-    </ul>
-    <a href="#" class="btn-trial" id="pricing-trial-btn">Start 14-day free trial</a>
-    <div class="trial-note">Credit card required &mdash; no charge for 14 days. Cancel before trial ends and pay nothing.</div>
+  <h2>Choose your plan</h2>
+  <p class="pricing-subtitle">Start with a 14-day free trial on any plan. Cancel anytime.</p>
+  <div class="pricing-grid">
+    <!-- Starter -->
+    <div class="price-card">
+      <div class="plan-name">Starter</div>
+      <div class="trial-badge">14-day free trial</div>
+      <div class="price-amount"><span>$</span>9</div>
+      <div class="price-period">per month &middot; cancel anytime</div>
+      <ul class="price-features">
+        <li><span class="check">✓</span> 5 audits per month</li>
+        <li><span class="check">✓</span> SEO, performance &amp; accessibility</li>
+        <li><span class="check">✓</span> Shareable report links</li>
+        <li><span class="check">✓</span> Email delivery of reports</li>
+        <li><span class="check">✓</span> 1 site monitored</li>
+        <li><span class="check">✓</span> API access</li>
+        <li><span class="x-mark">&mdash;</span> PDF export</li>
+        <li><span class="x-mark">&mdash;</span> Scheduled audits</li>
+      </ul>
+      <a href="#" class="btn-trial-outline" data-tier="starter">Start free trial</a>
+      <div class="trial-note">Credit card required &mdash; not charged for 14 days.</div>
+    </div>
+    <!-- Pro -->
+    <div class="price-card featured">
+      <div class="popular-badge">Most Popular</div>
+      <div class="plan-name">Pro</div>
+      <div class="trial-badge">14-day free trial</div>
+      <div class="price-amount"><span>$</span>29</div>
+      <div class="price-period">per month &middot; cancel anytime</div>
+      <ul class="price-features">
+        <li><span class="check">✓</span> Unlimited audits</li>
+        <li><span class="check">✓</span> Full deep-dive reports</li>
+        <li><span class="check">✓</span> Shareable report links</li>
+        <li><span class="check">✓</span> White-label PDF export</li>
+        <li><span class="check">✓</span> Up to 10 sites monitored</li>
+        <li><span class="check">✓</span> Scheduled recurring audits</li>
+        <li><span class="check">✓</span> Historical trend tracking</li>
+        <li><span class="check">✓</span> Priority scanning</li>
+      </ul>
+      <a href="#" class="btn-trial" data-tier="pro">Start free trial</a>
+      <div class="trial-note">Credit card required &mdash; not charged for 14 days.</div>
+    </div>
   </div>
 </section>
 
@@ -676,28 +759,30 @@ function generateLandingPage() {
   }
 
   // ── Pricing CTA — starts trial via Stripe ─────────────────────────────────
-  var pricingBtn = document.getElementById('pricing-trial-btn');
-  if (pricingBtn) {
-    pricingBtn.addEventListener('click', function (e) {
+  var trialBtns = document.querySelectorAll('[data-tier]');
+  trialBtns.forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
       e.preventDefault();
+      var tier = btn.getAttribute('data-tier') || 'starter';
       var email = prompt('Enter your email to start a 14-day free trial:');
       if (!email) return;
-      pricingBtn.textContent = 'Starting trial…';
+      var origText = btn.textContent;
+      btn.textContent = 'Starting trial…';
       fetch('/billing/trial', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email })
+        body: JSON.stringify({ email: email, tier: tier })
       })
       .then(function (r) { return r.ok ? r.json() : r.json().then(function (d) { return Promise.reject(d); }); })
       .then(function (data) {
         window.location.href = data.url;
       })
       .catch(function (err) {
-        pricingBtn.textContent = 'Start 14-day free trial';
+        btn.textContent = origText;
         alert((err && err.error) ? err.error : 'Something went wrong. Please try again.');
       });
     });
-  }
+  });
 })();
 </script>
 

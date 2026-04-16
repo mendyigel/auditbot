@@ -60,6 +60,9 @@ db.exec(`
 try { db.exec(`ALTER TABLE subscriptions ADD COLUMN audit_count  INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
 try { db.exec(`ALTER TABLE subscriptions ADD COLUMN emails_sent  TEXT    NOT NULL DEFAULT '{}'`); } catch (_) {}
 try { db.exec(`ALTER TABLE subscriptions ADD COLUMN pdf_count    INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
+try { db.exec(`ALTER TABLE subscriptions ADD COLUMN plan_tier    TEXT    NOT NULL DEFAULT 'pro'`); } catch (_) {}
+try { db.exec(`ALTER TABLE subscriptions ADD COLUMN monthly_audit_count INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
+try { db.exec(`ALTER TABLE subscriptions ADD COLUMN monthly_reset_at    INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
 
 // ── Report helpers ─────────────────────────────────────────────────────────────
 
@@ -104,6 +107,15 @@ const stmts = {
   ),
   updateEmailsSent: db.prepare(
     `UPDATE subscriptions SET emails_sent = ? WHERE api_key = ?`
+  ),
+  updatePlanTier: db.prepare(
+    `UPDATE subscriptions SET plan_tier = ? WHERE customer_id = ?`
+  ),
+  resetMonthlyAudits: db.prepare(
+    `UPDATE subscriptions SET monthly_audit_count = 0, monthly_reset_at = ? WHERE api_key = ?`
+  ),
+  incrMonthlyAuditCount: db.prepare(
+    `UPDATE subscriptions SET monthly_audit_count = monthly_audit_count + 1 WHERE api_key = ?`
   ),
 };
 
@@ -179,15 +191,18 @@ function updateSubscriptionStatus({ customerId, status, subscriptionId = null })
 
 function rowToSub(row) {
   return {
-    apiKey:         row.api_key,
-    email:          row.email,
-    customerId:     row.customer_id,
-    subscriptionId: row.subscription_id,
-    status:         row.status,
-    createdAt:      row.created_at,
-    auditCount:     row.audit_count || 0,
-    pdfCount:       row.pdf_count || 0,
-    emailsSent:     JSON.parse(row.emails_sent || '{}'),
+    apiKey:            row.api_key,
+    email:             row.email,
+    customerId:        row.customer_id,
+    subscriptionId:    row.subscription_id,
+    status:            row.status,
+    createdAt:         row.created_at,
+    auditCount:        row.audit_count || 0,
+    pdfCount:          row.pdf_count || 0,
+    emailsSent:        JSON.parse(row.emails_sent || '{}'),
+    planTier:          row.plan_tier || 'pro',
+    monthlyAuditCount: row.monthly_audit_count || 0,
+    monthlyResetAt:    row.monthly_reset_at || 0,
   };
 }
 
@@ -218,6 +233,37 @@ function markEmailSent(apiKey, emailKey) {
   stmts.updateEmailsSent.run(JSON.stringify(flags), apiKey);
 }
 
+/** Update the plan tier for a customer. */
+function updatePlanTier(customerId, tier) {
+  stmts.updatePlanTier.run(tier, customerId);
+}
+
+/** Increment monthly audit count, resetting if a new month has started. */
+function incrementMonthlyAuditCount(apiKey) {
+  const sub = stmts.getSubByApiKey.get(apiKey);
+  if (!sub) return;
+  const now = Date.now();
+  const resetAt = sub.monthly_reset_at || 0;
+  // Reset counter if more than 30 days since last reset
+  if (now - resetAt > 30 * 24 * 60 * 60 * 1000) {
+    stmts.resetMonthlyAudits.run(now, apiKey);
+  }
+  stmts.incrMonthlyAuditCount.run(apiKey);
+}
+
+/** Get current monthly audit count, auto-resetting if needed. */
+function getMonthlyAuditCount(apiKey) {
+  const sub = stmts.getSubByApiKey.get(apiKey);
+  if (!sub) return 0;
+  const now = Date.now();
+  const resetAt = sub.monthly_reset_at || 0;
+  if (now - resetAt > 30 * 24 * 60 * 60 * 1000) {
+    stmts.resetMonthlyAudits.run(now, apiKey);
+    return 0;
+  }
+  return sub.monthly_audit_count || 0;
+}
+
 /** Cheap liveness check — throws if the DB connection is broken. */
 function ping() {
   db.prepare('SELECT 1').get();
@@ -238,4 +284,7 @@ module.exports = {
   incrementPdfCount,
   getSubscriptionsForTrialEmails,
   markEmailSent,
+  updatePlanTier,
+  incrementMonthlyAuditCount,
+  getMonthlyAuditCount,
 };

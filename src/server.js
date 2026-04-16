@@ -17,6 +17,7 @@ const {
   getTrialInfo,
   TRIAL_AUDIT_LIMIT,
   TRIAL_PDF_LIMIT,
+  PLANS,
 } = require('./billing');
 const { requireActiveSubscription, requirePdfAllowed } = require('./auth');
 const db = require('./db');
@@ -168,13 +169,17 @@ app.get('/api', (_req, res) => {
       'GET /report/:id': 'View a cached HTML report by ID',
       'GET /report/:id/pdf': 'Download white-label PDF report (optional ?agency=Name&agencyUrl=…)',
       'GET /health': 'Health check',
-      'POST /billing/trial': 'Start a 14-day free trial — returns { url } to Stripe checkout (CC required, not charged until trial ends)',
-      'GET /trial/status?key=…': 'Get trial usage: audits used, PDF exports used, days left',
-      'POST /billing/checkout': 'Subscribe at $29/month — returns { url } to Stripe checkout',
+      'POST /billing/trial': 'Start a 14-day free trial — Body: { email, tier? } (starter or pro) — returns { url } to Stripe checkout',
+      'GET /trial/status?key=…': 'Get trial/plan usage: audits used, PDF exports used, days left, plan tier',
+      'POST /billing/checkout': 'Subscribe — Body: { email, tier? } (starter $9/mo or pro $29/mo) — returns { url } to Stripe checkout',
       'POST /billing/portal': 'Manage your subscription — Body: { apiKey }',
       'POST /billing/webhook': 'Stripe webhook endpoint (internal)',
     },
-    pricing: '14-day free trial (CC required) · then $29/month · Cancel anytime',
+    pricing: {
+      starter: { price: '$9/month', audits: '5/month', sites: 1, pdf: false },
+      pro: { price: '$29/month', audits: 'unlimited', sites: 10, pdf: true },
+      trial: '14-day free trial (CC required)',
+    },
     billingEnabled: !!process.env.STRIPE_SECRET_KEY,
   });
 });
@@ -225,10 +230,14 @@ app.get('/health', (_req, res) => {
  */
 app.post('/billing/checkout', async (req, res) => {
   try {
-    const { email } = req.body || {};
+    const { email, tier = 'pro' } = req.body || {};
+    if (tier !== 'starter' && tier !== 'pro') {
+      return res.status(400).json({ error: 'Invalid tier. Must be "starter" or "pro".' });
+    }
     const base = process.env.APP_URL || `http://localhost:${PORT}`;
     const { url, sessionId } = await createCheckoutSession({
       email: email || undefined,
+      tier,
       successUrl: `${base}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
       cancelUrl: `${base}/billing/cancel`,
     });
@@ -247,10 +256,14 @@ app.post('/billing/checkout', async (req, res) => {
  */
 app.post('/billing/trial', async (req, res) => {
   try {
-    const { email } = req.body || {};
+    const { email, tier = 'starter' } = req.body || {};
+    if (tier !== 'starter' && tier !== 'pro') {
+      return res.status(400).json({ error: 'Invalid tier. Must be "starter" or "pro".' });
+    }
     const base = process.env.APP_URL || `http://localhost:${PORT}`;
     const { url, sessionId } = await createTrialCheckoutSession({
       email: email || undefined,
+      tier,
       successUrl: `${base}/billing/trial/success?session_id={CHECKOUT_SESSION_ID}`,
       cancelUrl:  `${base}/billing/cancel`,
     });
@@ -305,18 +318,30 @@ app.get('/trial/status', (req, res) => {
   const sub = lookupSubscription(apiKey);
   if (!sub) return res.status(404).json({ error: 'API key not found' });
 
+  const plan = PLANS[sub.planTier] || PLANS.pro;
+  const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
+
   if (sub.status !== 'trialing') {
+    const monthlyCount = db.getMonthlyAuditCount(apiKey);
     return res.json({
       status: sub.status,
+      plan: {
+        tier: sub.planTier,
+        name: plan.name,
+        monthlyAuditsUsed: monthlyCount,
+        monthlyAuditsLimit: plan.monthlyAudits === Infinity ? 'unlimited' : plan.monthlyAudits,
+        pdfExport: plan.pdfExport,
+        maxSites: plan.maxSites,
+      },
       trial: null,
     });
   }
 
   const trial = getTrialInfo(sub);
-  const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
 
   return res.json({
     status: sub.status,
+    plan: { tier: sub.planTier, name: plan.name },
     trial: {
       auditsUsed:   trial.auditsUsed,
       auditsLimit:  TRIAL_AUDIT_LIMIT,
@@ -325,7 +350,7 @@ app.get('/trial/status', (req, res) => {
       pdfsLimit:    TRIAL_PDF_LIMIT,
       pdfsLeft:     Math.max(0, TRIAL_PDF_LIMIT - trial.pdfsUsed),
       daysLeft:     trial.daysLeft,
-      upgradeUrl:   `${appUrl}/billing/checkout`,
+      upgradeUrl:   `${appUrl}/billing/checkout?tier=pro`,
       softWarning:  trial.auditsUsed >= TRIAL_AUDIT_LIMIT - 2, // warn at 8/10
     },
   });
@@ -526,9 +551,10 @@ app.post('/audit', requireActiveSubscription, async (req, res) => {
     const storageKey = await saveReport(reportId, html);
     db.saveReportMeta({ id: reportId, url: targetUrl, storageKey, audit });
 
-    // Track audit count for trial email triggers
+    // Track audit count for trial email triggers and monthly limits
     if (req.subscription?.apiKey) {
       db.incrementAuditCount(req.subscription.apiKey);
+      db.incrementMonthlyAuditCount(req.subscription.apiKey);
     }
 
     // Server-side analytics event
