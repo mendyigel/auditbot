@@ -1,5 +1,7 @@
 'use strict';
 
+const { enrichAudit } = require('./interpret');
+
 /**
  * Generates a self-contained HTML report from an audit result object.
  */
@@ -9,6 +11,7 @@ function generateHtml(audit) {
   }
 
   const { scores, seo, performance: perf, accessibility: a11y } = audit;
+  const insights = enrichAudit(audit);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -34,6 +37,7 @@ function generateHtml(audit) {
     .badge-good { background: #c6f6d5; color: #276749; }
     .badge-warn { background: #fefcbf; color: #744210; }
     .badge-bad  { background: #fed7d7; color: #742a2a; }
+    .score-interpretation { font-size: 0.82rem; color: #4a5568; margin-top: 10px; line-height: 1.45; text-align: left; }
     section { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
     section h2 { font-size: 1rem; font-weight: 700; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
     .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; font-size: 0.85rem; margin-bottom: 16px; }
@@ -44,6 +48,29 @@ function generateHtml(audit) {
     ul.checklist li:last-child { border: none; }
     .pass::before { content: "✓"; color: #38a169; font-weight: 700; flex-shrink: 0; }
     .fail::before { content: "✗"; color: #e53e3e; font-weight: 700; flex-shrink: 0; }
+    .severity-tag { display: inline-block; font-size: 0.65rem; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-right: 6px; text-transform: uppercase; vertical-align: middle; }
+    .severity-critical { background: #e53e3e; color: #fff; }
+    .severity-high { background: #ed8936; color: #fff; }
+    .severity-medium { background: #d69e2e; color: #fff; }
+    .severity-low { background: #a0aec0; color: #fff; }
+    .top-fixes { background: linear-gradient(135deg, #1a1a2e 0%, #2d3748 100%); border-radius: 12px; padding: 24px; margin-bottom: 24px; color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+    .top-fixes h2 { color: #fff; font-size: 1.1rem; margin-bottom: 16px; }
+    .fix-item { background: rgba(255,255,255,0.08); border-radius: 8px; padding: 16px; margin-bottom: 12px; border-left: 4px solid; }
+    .fix-item:last-child { margin-bottom: 0; }
+    .fix-critical { border-left-color: #e53e3e; }
+    .fix-high { border-left-color: #ed8936; }
+    .fix-medium { border-left-color: #d69e2e; }
+    .fix-low { border-left-color: #a0aec0; }
+    .fix-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 6px; }
+    .fix-title { font-weight: 700; font-size: 0.95rem; }
+    .fix-meta { display: flex; gap: 8px; font-size: 0.72rem; }
+    .fix-meta span { padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+    .impact-tag { background: rgba(255,255,255,0.15); }
+    .effort-tag { background: rgba(255,255,255,0.1); }
+    .fix-why { font-size: 0.82rem; color: #cbd5e0; line-height: 1.4; }
+    .fix-category { font-size: 0.7rem; color: #a0aec0; margin-top: 4px; }
+    .interpretation-box { background: #edf2f7; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; font-size: 0.85rem; color: #2d3748; line-height: 1.5; }
+    .interpretation-box strong { color: #1a1a2e; }
     footer { text-align: center; font-size: 0.75rem; color: #a0aec0; padding: 32px 0; }
     @media (max-width: 600px) { .meta-grid { grid-template-columns: 1fr; } }
   </style>
@@ -58,15 +85,18 @@ function generateHtml(audit) {
 </header>
 
 <div class="container">
-  <!-- Score cards -->
+  <!-- Score cards with interpretations -->
   <div class="scores">
-    ${scoreCard('Overall', scores.overall)}
-    ${scoreCard('SEO', scores.seo)}
-    ${scoreCard('Performance', scores.performance)}
-    ${scoreCard('Accessibility', scores.accessibility)}
+    ${scoreCard('Overall', scores.overall, insights.scoreInterpretations.overall)}
+    ${scoreCard('SEO', scores.seo, insights.scoreInterpretations.seo)}
+    ${scoreCard('Performance', scores.performance, insights.scoreInterpretations.performance)}
+    ${scoreCard('Accessibility', scores.accessibility, insights.scoreInterpretations.accessibility)}
   </div>
 
-  <!-- Page metadata -->
+  <!-- Top 5 Fixes -->
+  ${topFixesSection(insights.topFixes)}
+
+  <!-- Page metadata with interpretations -->
   <section>
     <h2>📄 Page Info</h2>
     <dl class="meta-grid">
@@ -75,11 +105,14 @@ function generateHtml(audit) {
       <dt>HTML Size</dt><dd>${audit.pageSizeKb} KB</dd>
       <dt>Encoding</dt><dd>${escHtml(perf.contentEncoding || 'none')}</dd>
     </dl>
+    ${metricInterpretationBox(insights.metricInterpretations.ttfb)}
+    ${metricInterpretationBox(insights.metricInterpretations.pageSize)}
   </section>
 
   <!-- SEO -->
   <section>
     <h2>🔍 SEO <span style="font-weight:400;font-size:.85rem;color:#718096">(${scores.seo}/100)</span></h2>
+    ${interpretationBox(insights.scoreInterpretations.seo)}
     <dl class="meta-grid">
       <dt>Title</dt><dd>${escHtml(seo.title || '(none)')}</dd>
       <dt>Meta Description</dt><dd>${escHtml(seo.metaDescription || '(none)')}</dd>
@@ -90,12 +123,13 @@ function generateHtml(audit) {
       <dt>Internal Links</dt><dd>${seo.internalLinks}</dd>
       <dt>External Links</dt><dd>${seo.externalLinks}</dd>
     </dl>
-    ${checkList(seo.passes, seo.issues)}
+    ${checkListWithSeverity(seo.passes, insights.seoIssuesClassified)}
   </section>
 
   <!-- Performance -->
   <section>
     <h2>⚡ Performance <span style="font-weight:400;font-size:.85rem;color:#718096">(${scores.performance}/100)</span></h2>
+    ${interpretationBox(insights.scoreInterpretations.performance)}
     <dl class="meta-grid">
       <dt>TTFB</dt><dd>${perf.ttfbMs} ms</dd>
       <dt>HTML Size</dt><dd>${perf.pageSizeKb} KB</dd>
@@ -103,12 +137,17 @@ function generateHtml(audit) {
       <dt>Render-blocking CSS</dt><dd>${perf.renderBlockingCss}</dd>
       <dt>Images</dt><dd>${perf.imagesTotal} total, ${perf.imagesWithoutSrcset} without srcset/lazy</dd>
     </dl>
-    ${checkList(perf.passes, perf.issues)}
+    ${metricInterpretationBox(insights.metricInterpretations.renderBlockingJs)}
+    ${metricInterpretationBox(insights.metricInterpretations.renderBlockingCss)}
+    ${metricInterpretationBox(insights.metricInterpretations.images)}
+    ${metricInterpretationBox(insights.metricInterpretations.compression)}
+    ${checkListWithSeverity(perf.passes, insights.perfIssuesClassified)}
   </section>
 
   <!-- Accessibility -->
   <section>
     <h2>♿ Accessibility <span style="font-weight:400;font-size:.85rem;color:#718096">(${scores.accessibility}/100)</span></h2>
+    ${interpretationBox(insights.scoreInterpretations.accessibility)}
     <dl class="meta-grid">
       <dt>Images without alt</dt><dd>${a11y.imgsNoAlt}</dd>
       <dt>Unlabelled inputs</dt><dd>${a11y.unlabelledInputs}</dd>
@@ -117,7 +156,7 @@ function generateHtml(audit) {
       <dt>Skip link</dt><dd>${a11y.skipLink ? 'Present' : 'Missing'}</dd>
       <dt>Unlabelled buttons</dt><dd>${a11y.btnsNoName}</dd>
     </dl>
-    ${checkList(a11y.passes, a11y.issues)}
+    ${checkListWithSeverity(a11y.passes, insights.a11yIssuesClassified)}
   </section>
 </div>
 
@@ -126,19 +165,57 @@ function generateHtml(audit) {
 </html>`;
 }
 
-function scoreCard(label, score) {
+function scoreCard(label, score, interpretation) {
   const cls = score >= 80 ? 'ring-good' : score >= 50 ? 'ring-warn' : 'ring-bad';
   const badge = score >= 80
     ? `<span class="badge badge-good">Good</span>`
     : score >= 50
     ? `<span class="badge badge-warn">Needs Work</span>`
     : `<span class="badge badge-bad">Poor</span>`;
-  return `<div class="score-card"><h3>${label}</h3><div class="score-ring ${cls}">${score}</div>${badge}</div>`;
+  const interp = interpretation
+    ? `<div class="score-interpretation">${escHtml(interpretation.comparison)}</div>`
+    : '';
+  return `<div class="score-card"><h3>${label}</h3><div class="score-ring ${cls}">${score}</div>${badge}${interp}</div>`;
 }
 
-function checkList(passes, issues) {
+function interpretationBox(interp) {
+  if (!interp) return '';
+  return `<div class="interpretation-box"><strong>${escHtml(interp.comparison)}</strong> ${escHtml(interp.advice)}</div>`;
+}
+
+function metricInterpretationBox(text) {
+  if (!text) return '';
+  return `<div class="interpretation-box">${escHtml(text)}</div>`;
+}
+
+function topFixesSection(fixes) {
+  if (!fixes || fixes.length === 0) return '';
+  const items = fixes.map((fix, i) => {
+    const borderClass = `fix-${fix.severity}`;
+    return `<div class="fix-item ${borderClass}">
+      <div class="fix-header">
+        <span class="fix-title">#${i + 1} ${escHtml(fix.title)}</span>
+        <div class="fix-meta">
+          <span class="severity-tag severity-${fix.severity}">${fix.impact}</span>
+          <span class="effort-tag">${escHtml(fix.effort)}</span>
+        </div>
+      </div>
+      <div class="fix-why">${escHtml(fix.why)}</div>
+      <div class="fix-category">${escHtml(fix.category)}</div>
+    </div>`;
+  }).join('');
+
+  return `<div class="top-fixes">
+    <h2>🎯 Top ${fixes.length} Fixes — What to Do First</h2>
+    ${items}
+  </div>`;
+}
+
+function checkListWithSeverity(passes, classifiedIssues) {
   const items = [
-    ...issues.map(i => `<li class="fail">${escHtml(i)}</li>`),
+    ...classifiedIssues.map(i =>
+      `<li class="fail"><span class="severity-tag severity-${i.severity}">${i.severity}</span>${escHtml(i.text)}</li>`
+    ),
     ...passes.map(p => `<li class="pass">${escHtml(p)}</li>`),
   ];
   return `<ul class="checklist">${items.join('')}</ul>`;

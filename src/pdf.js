@@ -1,5 +1,7 @@
 'use strict';
 
+const { enrichAudit } = require('./interpret');
+
 let _fontsLoaded = false;
 
 function loadFonts() {
@@ -53,6 +55,7 @@ const NAVY = '#1a1a2e';
 const GREEN = '#38a169';
 const YELLOW = '#d69e2e';
 const RED = '#e53e3e';
+const ORANGE = '#ed8936';
 const GREY = '#718096';
 const LIGHT_GREY = '#f4f6f9';
 const WHITE = '#ffffff';
@@ -60,11 +63,21 @@ const WHITE = '#ffffff';
 function scoreColour(s) { return s >= 80 ? GREEN : s >= 50 ? YELLOW : RED; }
 function scoreLabel(s) { return s >= 80 ? 'Good' : s >= 50 ? 'Needs Work' : 'Poor'; }
 
+function severityColour(sev) {
+  switch (sev) {
+    case 'critical': return RED;
+    case 'high': return ORANGE;
+    case 'medium': return YELLOW;
+    default: return GREY;
+  }
+}
+
 // ── Document definition ───────────────────────────────────────────────────────
 
 function buildDocDefinition(audit, opts) {
   const { agencyName = '', agencyUrl = '' } = opts;
   const { scores, seo, performance: perf, accessibility: a11y } = audit;
+  const insights = enrichAudit(audit);
 
   const headerTitle = agencyName ? `${agencyName} — Website Audit Report` : 'Website Audit Report';
   const footerLine = agencyUrl || agencyName || 'Confidential';
@@ -101,7 +114,7 @@ function buildDocDefinition(audit, opts) {
     }),
 
     content: [
-      // Score overview
+      // Score overview with interpretations
       { text: 'Score Overview', fontSize: 13, bold: true, margin: [0, 8, 0, 8] },
       {
         columns: [
@@ -111,10 +124,16 @@ function buildDocDefinition(audit, opts) {
           scoreCard('Accessibility', scores.accessibility),
         ],
         columnGap: 8,
-        margin: [0, 0, 0, 16],
+        margin: [0, 0, 0, 8],
       },
 
-      // Page info
+      // Score benchmark interpretations
+      ...scoreInterpretationBlocks(insights.scoreInterpretations),
+
+      // Top Fixes section
+      ...topFixesBlocks(insights.topFixes),
+
+      // Page info with metric interpretations
       sectionHeader('Page Info'),
       metaTable([
         ['HTTP Status', String(audit.statusCode)],
@@ -122,9 +141,11 @@ function buildDocDefinition(audit, opts) {
         ['HTML Size', `${audit.pageSizeKb} KB`],
         ['Encoding', perf.contentEncoding || 'none'],
       ]),
+      ...metricInterpretationBlocks(insights.metricInterpretations, ['ttfb', 'pageSize']),
 
       // SEO
       sectionHeader(`SEO  —  ${scores.seo}/100`),
+      ...categoryInterpretationBlock(insights.scoreInterpretations.seo),
       metaTable([
         ['Title', seo.title || '(none)'],
         ['Meta Description', seo.metaDescription || '(none)'],
@@ -135,10 +156,11 @@ function buildDocDefinition(audit, opts) {
         ['Internal Links', String(seo.internalLinks)],
         ['External Links', String(seo.externalLinks)],
       ]),
-      checklistTable(seo.passes, seo.issues),
+      checklistTableWithSeverity(seo.passes, insights.seoIssuesClassified),
 
       // Performance
       sectionHeader(`Performance  —  ${scores.performance}/100`),
+      ...categoryInterpretationBlock(insights.scoreInterpretations.performance),
       metaTable([
         ['TTFB', `${perf.ttfbMs} ms`],
         ['HTML Size', `${perf.pageSizeKb} KB`],
@@ -146,10 +168,12 @@ function buildDocDefinition(audit, opts) {
         ['Render-blocking CSS', String(perf.renderBlockingCss)],
         ['Images', `${perf.imagesTotal} total, ${perf.imagesWithoutSrcset} without srcset/lazy`],
       ]),
-      checklistTable(perf.passes, perf.issues),
+      ...metricInterpretationBlocks(insights.metricInterpretations, ['renderBlockingJs', 'renderBlockingCss', 'images', 'compression']),
+      checklistTableWithSeverity(perf.passes, insights.perfIssuesClassified),
 
       // Accessibility
       sectionHeader(`Accessibility  —  ${scores.accessibility}/100`),
+      ...categoryInterpretationBlock(insights.scoreInterpretations.accessibility),
       metaTable([
         ['Images without alt', String(a11y.imgsNoAlt)],
         ['Unlabelled inputs', String(a11y.unlabelledInputs)],
@@ -158,7 +182,7 @@ function buildDocDefinition(audit, opts) {
         ['Skip link', a11y.skipLink ? 'Present' : 'Missing'],
         ['Unlabelled buttons', String(a11y.btnsNoName)],
       ]),
-      checklistTable(a11y.passes, a11y.issues),
+      checklistTableWithSeverity(a11y.passes, insights.a11yIssuesClassified),
     ],
   };
 }
@@ -185,6 +209,134 @@ function scoreCard(label, score) {
       hLineColor: () => '#e2e8f0', vLineColor: () => '#e2e8f0',
     },
   };
+}
+
+function scoreInterpretationBlocks(interpretations) {
+  const blocks = [];
+  const overall = interpretations.overall;
+  if (overall) {
+    blocks.push({
+      table: {
+        widths: ['*'],
+        body: [[{
+          fillColor: '#edf2f7',
+          margin: [10, 6, 10, 6],
+          stack: [
+            { text: overall.comparison, fontSize: 8.5, bold: true, color: NAVY },
+            { text: overall.advice, fontSize: 8, color: GREY, margin: [0, 2, 0, 0] },
+          ],
+        }]],
+      },
+      layout: { hLineWidth: () => 0, vLineWidth: () => 0 },
+      margin: [0, 0, 0, 12],
+    });
+  }
+  return blocks;
+}
+
+function categoryInterpretationBlock(interp) {
+  if (!interp) return [];
+  return [{
+    table: {
+      widths: ['*'],
+      body: [[{
+        fillColor: '#edf2f7',
+        margin: [10, 6, 10, 6],
+        stack: [
+          { text: interp.comparison, fontSize: 8, bold: true, color: NAVY },
+          { text: interp.advice, fontSize: 7.5, color: GREY, margin: [0, 2, 0, 0] },
+        ],
+      }]],
+    },
+    layout: { hLineWidth: () => 0, vLineWidth: () => 0 },
+    margin: [0, 0, 0, 4],
+  }];
+}
+
+function metricInterpretationBlocks(interpretations, keys) {
+  const blocks = [];
+  for (const key of keys) {
+    const text = interpretations[key];
+    if (text) {
+      blocks.push({
+        table: {
+          widths: ['*'],
+          body: [[{
+            fillColor: '#edf2f7',
+            margin: [10, 4, 10, 4],
+            text: text,
+            fontSize: 7.5,
+            color: '#4a5568',
+          }]],
+        },
+        layout: { hLineWidth: () => 0, vLineWidth: () => 0 },
+        margin: [0, 0, 0, 4],
+      });
+    }
+  }
+  return blocks;
+}
+
+function topFixesBlocks(fixes) {
+  if (!fixes || fixes.length === 0) return [];
+
+  const blocks = [];
+  blocks.push({
+    table: {
+      widths: ['*'],
+      body: [[{
+        fillColor: NAVY,
+        margin: [12, 10, 12, 10],
+        text: `Top ${fixes.length} Fixes — What to Do First`,
+        fontSize: 12,
+        bold: true,
+        color: WHITE,
+      }]],
+    },
+    layout: { hLineWidth: () => 0, vLineWidth: () => 0 },
+    margin: [0, 8, 0, 4],
+  });
+
+  const rows = fixes.map((fix, i) => [
+    {
+      margin: [4, 4, 4, 4],
+      stack: [
+        { text: `#${i + 1}`, fontSize: 10, bold: true, color: severityColour(fix.severity) },
+        { text: fix.impact.toUpperCase(), fontSize: 6, bold: true, color: severityColour(fix.severity), margin: [0, 2, 0, 0] },
+      ],
+      alignment: 'center',
+    },
+    {
+      margin: [4, 4, 4, 4],
+      stack: [
+        { text: fix.title, fontSize: 9, bold: true, color: NAVY },
+        { text: fix.why, fontSize: 7.5, color: GREY, margin: [0, 2, 0, 0] },
+        {
+          columns: [
+            { text: `${fix.category}`, fontSize: 6.5, color: GREY, width: 'auto' },
+            { text: `Effort: ${fix.effort}`, fontSize: 6.5, color: GREY, width: 'auto', margin: [8, 0, 0, 0] },
+          ],
+          margin: [0, 4, 0, 0],
+        },
+      ],
+    },
+  ]);
+
+  blocks.push({
+    table: {
+      widths: [36, '*'],
+      body: rows,
+    },
+    layout: {
+      hLineWidth: (i, node) => (i === 0 || i === node.table.body.length ? 0 : 0.5),
+      vLineWidth: () => 0,
+      hLineColor: () => '#e2e8f0',
+      fillColor: (row) => (row % 2 === 0 ? '#fafafa' : WHITE),
+    },
+    margin: [0, 0, 0, 12],
+  });
+
+  return blocks;
 }
 
 function sectionHeader(title) {
@@ -217,11 +369,16 @@ function metaTable(rows) {
   };
 }
 
-function checklistTable(passes, issues) {
+function checklistTableWithSeverity(passes, classifiedIssues) {
   const rows = [
-    ...issues.map((i) => [
-      { text: 'FAIL', fontSize: 7, bold: true, color: RED, margin: [4, 3, 4, 3] },
-      { text: i, fontSize: 8.5, color: RED, margin: [0, 3, 4, 3] },
+    ...classifiedIssues.map((item) => [
+      {
+        stack: [
+          { text: item.severity.toUpperCase(), fontSize: 6, bold: true, color: severityColour(item.severity), alignment: 'center' },
+        ],
+        margin: [2, 4, 2, 3],
+      },
+      { text: item.text, fontSize: 8.5, color: RED, margin: [0, 3, 4, 3] },
     ]),
     ...passes.map((p) => [
       { text: 'PASS', fontSize: 7, bold: true, color: GREEN, margin: [4, 3, 4, 3] },
@@ -231,7 +388,7 @@ function checklistTable(passes, issues) {
   if (!rows.length) return {};
   return {
     table: {
-      widths: [28, '*'],
+      widths: [36, '*'],
       body: rows,
     },
     layout: {
