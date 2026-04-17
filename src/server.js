@@ -22,6 +22,9 @@ const {
 } = require('./billing');
 const { requireActiveSubscription, requirePdfAllowed } = require('./auth');
 const db = require('./db');
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+const cookieParser = require('cookie-parser');
 const { saveReport, getReport, deleteReport, USE_S3 } = require('./storage');
 const { generateLandingPage } = require('./landing');
 const { generateBlogIndex, generateBlogPost } = require('./blog');
@@ -38,6 +41,7 @@ const REPORT_TTL_MS = (parseInt(process.env.REPORT_TTL_DAYS, 10) || 30) * 24 * 6
 // Stripe webhooks require raw body — mount before express.json()
 app.use('/billing/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
+app.use(cookieParser());
 
 // Prune old report metadata (and orphaned files) daily
 setInterval(() => {
@@ -221,13 +225,136 @@ app.get('/health', (_req, res) => {
   res.status(allOk ? 200 : 503).json(payload);
 });
 
+// ── Auth style shared between sign-in and sign-up ────────────────────────────
+
+const authPageStyles = `
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --brand: #3b82f6; --brand-dark: #2563eb; --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #f1f5f9; --muted: #94a3b8; --danger: #f87171; --success: #34d399; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+    a { color: var(--brand); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 40px; border-bottom: 1px solid var(--border); }
+    .logo { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.5px; color: var(--text); }
+    .logo span { color: var(--brand); }
+    .auth-container { max-width: 440px; margin: 80px auto; padding: 0 24px; }
+    h1 { font-size: 1.75rem; font-weight: 800; margin-bottom: 8px; }
+    .subtitle { color: var(--muted); margin-bottom: 32px; }
+    label { display: block; font-size: 0.875rem; font-weight: 600; margin-bottom: 8px; }
+    input[type="text"], input[type="password"] {
+      width: 100%; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text); font-size: 1rem; outline: none; margin-bottom: 16px;
+    }
+    input:focus { border-color: var(--brand); }
+    input::placeholder { color: var(--muted); }
+    .btn { display: block; width: 100%; padding: 14px; background: var(--brand); color: #fff; border: none; border-radius: 8px; font-size: 1rem; font-weight: 700; cursor: pointer; }
+    .btn:hover { background: var(--brand-dark); }
+    .btn:disabled { opacity: 0.6; cursor: default; }
+    .form-error { display: none; margin-top: 12px; font-size: 0.9rem; color: var(--danger); font-weight: 600; }
+    .form-success { display: none; margin-top: 12px; font-size: 0.9rem; color: var(--success); font-weight: 600; }
+    .alt-link { text-align: center; margin-top: 24px; color: var(--muted); font-size: 0.875rem; }
+    .field-hint { font-size: 0.8rem; color: var(--muted); margin-top: -12px; margin-bottom: 16px; }
+`;
+
+const authNavHtml = `<nav>
+  <a href="/" style="text-decoration:none"><div class="logo">Orbio<span>Labs</span></div></a>
+  <a href="/#pricing" style="background:var(--brand);color:#fff;padding:8px 20px;border-radius:6px;font-weight:600;font-size:0.875rem;">Start free trial</a>
+</nav>`;
+
+// ── Sign-up page ─────────────────────────────────────────────────────────────
+
+app.get('/signup', (req, res) => {
+  const apiKey = req.query.api_key || '';
+  const trialBanner = apiKey
+    ? '<div style="background:rgba(52,211,153,0.15);border:1px solid rgba(52,211,153,0.3);border-radius:8px;padding:16px;margin-bottom:24px;color:var(--success);font-weight:600;font-size:0.9rem;">Your free trial is active! Create a username and password to access your account.</div>'
+    : '';
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign Up — OrbioLabs</title>
+  <style>${authPageStyles}</style>
+</head>
+<body>
+${authNavHtml}
+<div class="auth-container">
+  <h1>Create your account</h1>
+  <p class="subtitle">Sign up to get started with OrbioLabs website audits.</p>
+  ${trialBanner}
+  <form id="signup-form" novalidate>
+    <input type="hidden" id="api-key" value="${apiKey.replace(/"/g, '&quot;')}" />
+    <label for="username">Username</label>
+    <input type="text" id="username" name="username" placeholder="johndoe" required autocomplete="username" />
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" placeholder="At least 8 characters" required autocomplete="new-password" />
+    <p class="field-hint">Must be at least 8 characters long.</p>
+    <label for="email">Email <span style="color:var(--muted);font-weight:400">(optional)</span></label>
+    <input type="text" id="email" name="email" placeholder="you@example.com" autocomplete="email" />
+    <button type="submit" class="btn" id="signup-btn">Create account</button>
+  </form>
+  <div id="form-error" class="form-error"></div>
+  <div id="form-success" class="form-success"></div>
+  <p class="alt-link">Already have an account? <a href="/signin">Sign in</a></p>
+</div>
+<script>
+(function () {
+  var form = document.getElementById('signup-form');
+  var btn = document.getElementById('signup-btn');
+  var errEl = document.getElementById('form-error');
+  var successEl = document.getElementById('form-success');
+  var apiKeyEl = document.getElementById('api-key');
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var username = document.getElementById('username').value.trim();
+    var password = document.getElementById('password').value;
+    var email = document.getElementById('email').value.trim();
+    var apiKey = apiKeyEl ? apiKeyEl.value : '';
+    if (!username || !password) return;
+    if (password.length < 8) {
+      errEl.textContent = 'Password must be at least 8 characters.';
+      errEl.style.display = 'block';
+      successEl.style.display = 'none';
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Creating account…';
+    errEl.style.display = 'none';
+    successEl.style.display = 'none';
+
+    var body = { username: username, password: password, email: email || undefined };
+    if (apiKey) body.apiKey = apiKey;
+
+    fetch('/auth/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    .then(function (r) {
+      if (!r.ok) return r.json().then(function (d) { return Promise.reject(d); });
+      return r.json();
+    })
+    .then(function () {
+      window.location.href = '/dashboard';
+    })
+    .catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = 'Create account';
+      errEl.textContent = (err && err.error) ? err.error : 'Sign-up failed. Please try again.';
+      errEl.style.display = 'block';
+    });
+  });
+})();
+</script>
+${appPageAnalyticsSnippet('signup')}
+${consentBannerSnippet()}
+</body>
+</html>`);
+});
+
 // ── Sign-in page ──────────────────────────────────────────────────────────────
 
-/**
- * GET /signin
- * Page where existing users enter their API key to view subscription status
- * and manage their account via Stripe portal.
- */
 app.get('/signin', (_req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!DOCTYPE html>
@@ -236,109 +363,56 @@ app.get('/signin', (_req, res) => {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Sign In — OrbioLabs</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root { --brand: #3b82f6; --brand-dark: #2563eb; --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #f1f5f9; --muted: #94a3b8; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
-    a { color: var(--brand); text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 40px; border-bottom: 1px solid var(--border); }
-    .logo { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.5px; color: var(--text); }
-    .logo span { color: var(--brand); }
-    .signin-container { max-width: 440px; margin: 80px auto; padding: 0 24px; }
-    h1 { font-size: 1.75rem; font-weight: 800; margin-bottom: 8px; }
-    .subtitle { color: var(--muted); margin-bottom: 32px; }
-    label { display: block; font-size: 0.875rem; font-weight: 600; margin-bottom: 8px; }
-    input[type="text"] {
-      width: 100%; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border);
-      background: var(--surface); color: var(--text); font-size: 1rem; outline: none; margin-bottom: 16px;
-    }
-    input[type="text"]:focus { border-color: var(--brand); }
-    input[type="text"]::placeholder { color: var(--muted); }
-    .btn { display: block; width: 100%; padding: 14px; background: var(--brand); color: #fff; border: none; border-radius: 8px; font-size: 1rem; font-weight: 700; cursor: pointer; }
-    .btn:hover { background: var(--brand-dark); }
-    .btn:disabled { opacity: 0.6; cursor: default; }
-    #signin-error { display: none; margin-top: 12px; font-size: 0.9rem; color: #f87171; font-weight: 600; }
-    #signin-result { display: none; margin-top: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
-    #signin-result h2 { font-size: 1.125rem; font-weight: 700; margin-bottom: 16px; }
-    .status-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
-    .status-row:last-child { border: none; }
-    .status-label { color: var(--muted); }
-    .status-value { font-weight: 600; }
-    .portal-link { display: block; width: 100%; text-align: center; padding: 12px; background: var(--brand); color: #fff; border-radius: 8px; font-weight: 700; margin-top: 20px; }
-    .portal-link:hover { background: var(--brand-dark); text-decoration: none; }
-    .signup-note { text-align: center; margin-top: 24px; color: var(--muted); font-size: 0.875rem; }
-  </style>
+  <style>${authPageStyles}</style>
 </head>
 <body>
-<nav>
-  <a href="/" style="text-decoration:none"><div class="logo">Orbio<span>Labs</span></div></a>
-  <a href="#pricing" style="background:var(--brand);color:#fff;padding:8px 20px;border-radius:6px;font-weight:600;font-size:0.875rem;">Start free trial</a>
-</nav>
-<div class="signin-container">
+${authNavHtml}
+<div class="auth-container">
   <h1>Sign in</h1>
-  <p class="subtitle">Enter your API key to view your subscription and manage your account.</p>
+  <p class="subtitle">Enter your username and password to access your account.</p>
   <form id="signin-form" novalidate>
-    <label for="api-key">API Key</label>
-    <input type="text" id="api-key" name="key" placeholder="obl_xxxxxxxxxxxxxxxx" required autocomplete="off" />
+    <label for="username">Username</label>
+    <input type="text" id="username" name="username" placeholder="johndoe" required autocomplete="username" />
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" placeholder="Your password" required autocomplete="current-password" />
     <button type="submit" class="btn" id="signin-btn">Sign in</button>
   </form>
-  <div id="signin-error"></div>
-  <div id="signin-result">
-    <h2>Your Subscription</h2>
-    <div id="status-rows"></div>
-    <a id="portal-btn" href="#" class="portal-link">Manage subscription</a>
-  </div>
-  <div class="signup-note">Don't have an account? <a href="/#pricing">Start a free trial</a></div>
+  <div id="form-error" class="form-error"></div>
+  <p class="alt-link">Don't have an account? <a href="/signup">Sign up</a></p>
 </div>
 <script>
 (function () {
   var form = document.getElementById('signin-form');
   var btn = document.getElementById('signin-btn');
-  var errEl = document.getElementById('signin-error');
-  var resultEl = document.getElementById('signin-result');
+  var errEl = document.getElementById('form-error');
 
   form.addEventListener('submit', function (e) {
     e.preventDefault();
-    var key = document.getElementById('api-key').value.trim();
-    if (!key) return;
+    var username = document.getElementById('username').value.trim();
+    var password = document.getElementById('password').value;
+    if (!username || !password) return;
     btn.disabled = true;
-    btn.textContent = 'Checking…';
+    btn.textContent = 'Signing in…';
     errEl.style.display = 'none';
-    resultEl.style.display = 'none';
 
-    fetch('/trial/status?key=' + encodeURIComponent(key))
-      .then(function (r) {
-        if (!r.ok) return r.json().then(function (d) { return Promise.reject(d); });
-        return r.json();
-      })
-      .then(function (data) {
-        btn.disabled = false;
-        btn.textContent = 'Sign in';
-        var rows = '';
-        rows += '<div class="status-row"><span class="status-label">Status</span><span class="status-value">' + data.status + '</span></div>';
-        if (data.plan) {
-          rows += '<div class="status-row"><span class="status-label">Plan</span><span class="status-value">' + (data.plan.name || data.plan.tier) + '</span></div>';
-        }
-        if (data.trial) {
-          rows += '<div class="status-row"><span class="status-label">Audits used</span><span class="status-value">' + data.trial.auditsUsed + ' / ' + data.trial.auditsLimit + '</span></div>';
-          rows += '<div class="status-row"><span class="status-label">PDFs used</span><span class="status-value">' + data.trial.pdfsUsed + ' / ' + data.trial.pdfsLimit + '</span></div>';
-          rows += '<div class="status-row"><span class="status-label">Days left</span><span class="status-value">' + data.trial.daysLeft + '</span></div>';
-        } else if (data.plan) {
-          var used = data.plan.monthlyAuditsUsed != null ? data.plan.monthlyAuditsUsed : '—';
-          var limit = data.plan.monthlyAuditsLimit || '—';
-          rows += '<div class="status-row"><span class="status-label">Monthly audits</span><span class="status-value">' + used + ' / ' + limit + '</span></div>';
-        }
-        document.getElementById('status-rows').innerHTML = rows;
-        document.getElementById('portal-btn').href = '/billing/portal?key=' + encodeURIComponent(key);
-        resultEl.style.display = 'block';
-      })
-      .catch(function (err) {
-        btn.disabled = false;
-        btn.textContent = 'Sign in';
-        errEl.textContent = (err && err.error) ? err.error : 'Could not find that API key. Please check and try again.';
-        errEl.style.display = 'block';
-      });
+    fetch('/auth/signin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username, password: password })
+    })
+    .then(function (r) {
+      if (!r.ok) return r.json().then(function (d) { return Promise.reject(d); });
+      return r.json();
+    })
+    .then(function () {
+      window.location.href = '/dashboard';
+    })
+    .catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = 'Sign in';
+      errEl.textContent = (err && err.error) ? err.error : 'Invalid username or password.';
+      errEl.style.display = 'block';
+    });
   });
 })();
 </script>
@@ -346,6 +420,193 @@ ${appPageAnalyticsSnippet('signin')}
 ${consentBannerSnippet()}
 </body>
 </html>`);
+});
+
+// ── Auth API endpoints ───────────────────────────────────────────────────────
+
+const BCRYPT_ROUNDS = 12;
+
+/**
+ * POST /auth/signup
+ * Body: { username, password, email? }
+ * Creates a new user account with hashed password, sets session cookie.
+ */
+app.post('/auth/signup', async (req, res) => {
+  const { username, password, email, apiKey } = req.body || {};
+
+  if (!username || typeof username !== 'string' || username.trim().length < 3) {
+    return res.status(400).json({ error: 'Username must be at least 3 characters.' });
+  }
+  if (!password || typeof password !== 'string' || password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  }
+  if (username.trim().length > 64) {
+    return res.status(400).json({ error: 'Username must be 64 characters or fewer.' });
+  }
+  if (!/^[a-zA-Z0-9_.-]+$/.test(username.trim())) {
+    return res.status(400).json({ error: 'Username may only contain letters, numbers, underscores, hyphens, and dots.' });
+  }
+
+  const trimmedUsername = username.trim();
+  const existing = db.getUserByUsername(trimmedUsername);
+  if (existing) {
+    return res.status(409).json({ error: 'That username is already taken.' });
+  }
+
+  try {
+    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    const userId = uuidv4();
+    const sessionToken = crypto.randomBytes(32).toString('hex');
+
+    db.createUser({
+      id: userId,
+      username: trimmedUsername,
+      passwordHash,
+      email: email || null,
+      apiKey: apiKey || null,
+      sessionToken,
+    });
+
+    res.cookie('session', sessionToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+      path: '/',
+    });
+
+    return res.json({ ok: true, username: trimmedUsername });
+  } catch (err) {
+    console.error('[auth/signup error]', err);
+    return res.status(500).json({ error: 'Account creation failed. Please try again.' });
+  }
+});
+
+/**
+ * POST /auth/signin
+ * Body: { username, password }
+ * Verifies credentials, sets session cookie.
+ */
+app.post('/auth/signin', async (req, res) => {
+  const { username, password } = req.body || {};
+
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required.' });
+  }
+
+  const user = db.getUserByUsername(username.trim());
+  if (!user) {
+    return res.status(401).json({ error: 'Invalid username or password.' });
+  }
+
+  const valid = await bcrypt.compare(password, user.password_hash);
+  if (!valid) {
+    return res.status(401).json({ error: 'Invalid username or password.' });
+  }
+
+  const sessionToken = crypto.randomBytes(32).toString('hex');
+  db.updateUserSession(user.id, sessionToken);
+
+  res.cookie('session', sessionToken, {
+    httpOnly: true,
+    sameSite: 'lax',
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+    path: '/',
+  });
+
+  return res.json({ ok: true, username: user.username });
+});
+
+/**
+ * POST /auth/signout
+ * Clears session cookie and invalidates session token.
+ */
+app.post('/auth/signout', (req, res) => {
+  const sessionToken = req.cookies && req.cookies.session;
+  if (sessionToken) {
+    const user = db.getUserBySessionToken(sessionToken);
+    if (user) db.updateUserSession(user.id, null);
+  }
+  res.clearCookie('session', { path: '/' });
+  return res.json({ ok: true });
+});
+
+/**
+ * GET /dashboard
+ * Authenticated user dashboard — shows account info, subscription status, audit tools.
+ */
+app.get('/dashboard', (req, res) => {
+  const sessionToken = req.cookies && req.cookies.session;
+  if (!sessionToken) return res.redirect('/signin');
+  const user = db.getUserBySessionToken(sessionToken);
+  if (!user) return res.redirect('/signin');
+
+  const sub = user.api_key ? lookupSubscription(user.api_key) : null;
+  const appUrl = process.env.APP_URL || '';
+
+  let subscriptionHtml = '';
+  if (sub) {
+    const plan = PLANS[sub.planTier] || PLANS.pro;
+    subscriptionHtml = '<div class="card"><h2>Subscription</h2>';
+    subscriptionHtml += '<div class="status-row"><span class="status-label">Status</span><span class="status-value">' + sub.status + '</span></div>';
+    subscriptionHtml += '<div class="status-row"><span class="status-label">Plan</span><span class="status-value">' + plan.name + '</span></div>';
+    subscriptionHtml += '<div class="status-row"><span class="status-label">API Key</span><span class="status-value" style="font-family:monospace;font-size:0.8rem;word-break:break-all">' + sub.apiKey + '</span></div>';
+    subscriptionHtml += '<a href="/billing/portal?key=' + encodeURIComponent(sub.apiKey) + '" class="portal-link">Manage subscription</a>';
+    subscriptionHtml += '</div>';
+  } else {
+    subscriptionHtml = '<div class="card"><h2>Subscription</h2><p style="color:var(--muted)">No active subscription yet.</p><a href="/#pricing" class="portal-link">Start a free trial</a></div>';
+  }
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send('<!DOCTYPE html>' +
+'<html lang="en">' +
+'<head>' +
+'  <meta charset="UTF-8" />' +
+'  <meta name="viewport" content="width=device-width, initial-scale=1" />' +
+'  <title>Dashboard — OrbioLabs</title>' +
+'  <style>' +
+'    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }' +
+'    :root { --brand: #3b82f6; --brand-dark: #2563eb; --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #f1f5f9; --muted: #94a3b8; }' +
+'    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }' +
+'    a { color: var(--brand); text-decoration: none; }' +
+'    nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 40px; border-bottom: 1px solid var(--border); }' +
+'    .logo { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.5px; color: var(--text); }' +
+'    .logo span { color: var(--brand); }' +
+'    .nav-right { display: flex; align-items: center; gap: 16px; }' +
+'    .nav-user { color: var(--muted); font-size: 0.875rem; }' +
+'    .signout-btn { background: none; border: 1px solid var(--border); color: var(--muted); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.875rem; }' +
+'    .signout-btn:hover { border-color: var(--muted); color: var(--text); }' +
+'    .dashboard { max-width: 640px; margin: 40px auto; padding: 0 24px; }' +
+'    h1 { font-size: 1.75rem; font-weight: 800; margin-bottom: 24px; }' +
+'    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; }' +
+'    .card h2 { font-size: 1.125rem; font-weight: 700; margin-bottom: 16px; }' +
+'    .status-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }' +
+'    .status-row:last-of-type { border: none; }' +
+'    .status-label { color: var(--muted); }' +
+'    .status-value { font-weight: 600; }' +
+'    .portal-link { display: block; width: 100%; text-align: center; padding: 12px; background: var(--brand); color: #fff; border-radius: 8px; font-weight: 700; margin-top: 20px; text-decoration: none; }' +
+'    .portal-link:hover { background: var(--brand-dark); }' +
+'  </style>' +
+'</head>' +
+'<body>' +
+'<nav>' +
+'  <a href="/" style="text-decoration:none"><div class="logo">Orbio<span>Labs</span></div></a>' +
+'  <div class="nav-right">' +
+'    <span class="nav-user">' + user.username + '</span>' +
+'    <button class="signout-btn" onclick="fetch(\'/auth/signout\',{method:\'POST\'}).then(function(){window.location.href=\'/signin\'})">Sign out</button>' +
+'  </div>' +
+'</nav>' +
+'<div class="dashboard">' +
+'  <h1>Dashboard</h1>' +
+'  <div class="card">' +
+'    <h2>Account</h2>' +
+'    <div class="status-row"><span class="status-label">Username</span><span class="status-value">' + user.username + '</span></div>' +
+'    <div class="status-row"><span class="status-label">Email</span><span class="status-value">' + (user.email || '—') + '</span></div>' +
+'  </div>' +
+  subscriptionHtml +
+'</div>' +
+appPageAnalyticsSnippet('dashboard') +
+consentBannerSnippet() +
+'</body></html>');
 });
 
 // ── Billing routes ────────────────────────────────────────────────────────────
@@ -415,40 +676,17 @@ app.post('/billing/trial', async (req, res) => {
  * Landing page after a trial is started via Stripe Checkout.
  */
 app.get('/billing/trial/success', async (req, res) => {
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  let apiKeyHtml = '<p>Your API key will be sent to your email shortly. Check your inbox.</p>';
   try {
     const result = await fulfillCheckoutSession(req.query.session_id);
     if (result && result.apiKey) {
-      apiKeyHtml = `<p>Your API key:</p><p><code>${result.apiKey}</code></p><p>Save this key — you'll need it to authenticate API requests. A copy has also been sent to your email.</p>`;
+      // Redirect to sign-up with the API key so the user creates an account linked to their subscription
+      return res.redirect(`/signup?api_key=${encodeURIComponent(result.apiKey)}`);
     }
   } catch (err) {
     console.error('[billing/trial/success] session retrieval failed:', err.message);
   }
-  res.send(`<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><title>OrbioLabs — Trial Started</title>
-<style>body{font-family:system-ui,sans-serif;max-width:600px;margin:80px auto;padding:0 24px;color:#111}
-h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-size:1.1em;word-break:break-all}
-.trial-info{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:20px;margin:24px 0;}
-.trial-info ul{margin:8px 0 0 0;padding-left:20px;color:#15803d}</style>
-</head>
-<body>
-<h1>Your free trial is active!</h1>
-<div class="trial-info">
-  <strong>14-day free trial — no charge today</strong>
-  <ul>
-    <li>Up to 10 audits</li>
-    <li>Up to 3 PDF exports</li>
-    <li>Full SEO, performance &amp; accessibility checks</li>
-  </ul>
-</div>
-${apiKeyHtml}
-<p>You won't be charged until your trial ends. Cancel anytime before then at no cost.</p>
-<p><a href="/">Back to OrbioLabs</a></p>
-${appPageAnalyticsSnippet('billing/trial/success')}
-${consentBannerSnippet()}
-</body></html>`);
+  // Fallback if fulfillment fails — redirect to sign-up without API key
+  res.redirect('/signup');
 });
 
 /**
@@ -507,30 +745,15 @@ app.get('/trial/status', (req, res) => {
  * Retrieves (or creates) the API key for the new customer and displays it.
  */
 app.get('/billing/success', async (req, res) => {
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  let apiKeyHtml = '<p>Your API key will be sent to your email shortly.</p>';
   try {
     const result = await fulfillCheckoutSession(req.query.session_id);
     if (result && result.apiKey) {
-      apiKeyHtml = `<p>Your API key:</p><p><code>${result.apiKey}</code></p><p>Save this key — you'll need it to authenticate API requests. A copy has also been sent to your email.</p>`;
+      return res.redirect(`/signup?api_key=${encodeURIComponent(result.apiKey)}`);
     }
   } catch (err) {
     console.error('[billing/success] session retrieval failed:', err.message);
   }
-  res.send(`<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><title>OrbioLabs — Subscription Active</title>
-<style>body{font-family:system-ui,sans-serif;max-width:600px;margin:80px auto;padding:0 24px;color:#111}
-h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-size:1.1em;word-break:break-all}</style>
-</head>
-<body>
-<h1>You're all set!</h1>
-<p>Your subscription is active.</p>
-${apiKeyHtml}
-<p><a href="/">Back to OrbioLabs</a></p>
-${appPageAnalyticsSnippet('billing/success')}
-${consentBannerSnippet()}
-</body></html>`);
+  res.redirect('/signup');
 });
 
 /**
