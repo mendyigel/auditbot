@@ -351,6 +351,14 @@ ${consentBannerSnippet()}
 // ── Billing routes ────────────────────────────────────────────────────────────
 
 /**
+ * GET /billing/checkout
+ * Redirect to sign-in page (old bookmarks / direct navigation).
+ */
+app.get('/billing/checkout', (_req, res) => {
+  res.redirect(301, '/signin');
+});
+
+/**
  * POST /billing/checkout
  * Body: { email? }
  * Returns { url } — redirect the user's browser to this Stripe Checkout URL.
