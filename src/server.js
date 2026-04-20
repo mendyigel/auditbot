@@ -827,10 +827,15 @@ app.get('/dashboard', (req, res) => {
   if (sub) {
     const plan = PLANS[sub.planTier] || PLANS.pro;
     subscriptionHtml = '<div class="card"><h2>Subscription</h2>';
-    subscriptionHtml += '<div class="status-row"><span class="status-label">Status</span><span class="status-value">' + sub.status + '</span></div>';
+    const statusDisplay = sub.status === 'cancelling' ? 'Cancelling at period end' : sub.status;
+    subscriptionHtml += '<div class="status-row"><span class="status-label">Status</span><span class="status-value">' + statusDisplay + '</span></div>';
     subscriptionHtml += '<div class="status-row"><span class="status-label">Plan</span><span class="status-value">' + plan.name + '</span></div>';
     subscriptionHtml += '<div class="status-row"><span class="status-label">API Key</span><span class="status-value" style="font-family:monospace;font-size:0.8rem;word-break:break-all">' + sub.apiKey + '</span></div>';
-    subscriptionHtml += '<a href="/billing/portal?key=' + encodeURIComponent(sub.apiKey) + '" class="portal-link">Manage subscription</a>';
+    if (sub.status === 'cancelling') {
+      subscriptionHtml += '<a href="/billing/portal?key=' + encodeURIComponent(sub.apiKey) + '" class="portal-link">Reactivate subscription</a>';
+    } else {
+      subscriptionHtml += '<a href="/billing/portal?key=' + encodeURIComponent(sub.apiKey) + '" class="portal-link">Manage subscription</a>';
+    }
     subscriptionHtml += '</div>';
   } else {
     subscriptionHtml = '<div class="card"><h2>Subscription</h2><p style="color:var(--muted)">No active subscription yet.</p><a href="/#pricing" class="portal-link">Start a free trial</a></div>';

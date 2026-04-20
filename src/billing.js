@@ -103,10 +103,10 @@ const TRIAL_DAYS        = 14;
 const TRIAL_AUDIT_LIMIT = 10;
 const TRIAL_PDF_LIMIT   = 3;
 
-/** Returns true if the API key has an active or trialing subscription. */
+/** Returns true if the API key has an active, trialing, or cancelling subscription. */
 function isActive(apiKey) {
   const sub = db.getSubscriptionByApiKey(apiKey);
-  return sub && (sub.status === 'active' || sub.status === 'trialing');
+  return sub && (sub.status === 'active' || sub.status === 'trialing' || sub.status === 'cancelling');
 }
 
 /** Returns trial usage info for a trialing subscription, or null for paid. */
@@ -233,9 +233,14 @@ async function handleWebhook(rawBody, signature) {
 
     case 'customer.subscription.updated': {
       const subscription = data.object;
+      // Detect pending cancellation (cancel_at_period_end) vs raw Stripe status
+      let effectiveStatus = subscription.status;
+      if (subscription.cancel_at_period_end && subscription.status === 'active') {
+        effectiveStatus = 'cancelling';
+      }
       db.updateSubscriptionStatus({
         customerId: subscription.customer,
-        status: subscription.status,
+        status: effectiveStatus,
         subscriptionId: subscription.id,
       });
       // Sync plan tier on upgrade/downgrade
@@ -276,14 +281,76 @@ async function handleWebhook(rawBody, signature) {
   return { handled: true };
 }
 
+// ── Portal configuration (cached) ─────────────────────────────────────────────
+let _portalConfigId = null;
+
+/**
+ * Get or create a Stripe Customer Portal configuration with cancellation enabled.
+ */
+async function getOrCreatePortalConfiguration() {
+  if (_portalConfigId) return _portalConfigId;
+  const stripe = getStripe();
+
+  // Check for an existing active configuration first
+  const configs = await stripe.billingPortal.configurations.list({ limit: 1 });
+  if (configs.data.length > 0) {
+    const existing = configs.data[0];
+    // If cancellation is already enabled, reuse it
+    if (existing.features?.subscription_cancel?.enabled) {
+      _portalConfigId = existing.id;
+      return _portalConfigId;
+    }
+    // Update existing config to enable cancellation
+    const updated = await stripe.billingPortal.configurations.update(existing.id, {
+      features: {
+        subscription_cancel: {
+          enabled: true,
+          mode: 'at_period_end',
+          cancellation_reason: {
+            enabled: true,
+            options: ['too_expensive', 'missing_features', 'switched_service', 'unused', 'other'],
+          },
+        },
+        payment_method_update: { enabled: true },
+        invoice_history: { enabled: true },
+      },
+    });
+    _portalConfigId = updated.id;
+    return _portalConfigId;
+  }
+
+  // Create a new portal configuration
+  const config = await stripe.billingPortal.configurations.create({
+    business_profile: {
+      headline: 'Manage your OrbioLabs subscription',
+    },
+    features: {
+      subscription_cancel: {
+        enabled: true,
+        mode: 'at_period_end',
+        cancellation_reason: {
+          enabled: true,
+          options: ['too_expensive', 'missing_features', 'switched_service', 'unused', 'other'],
+        },
+      },
+      payment_method_update: { enabled: true },
+      invoice_history: { enabled: true },
+    },
+  });
+  _portalConfigId = config.id;
+  return _portalConfigId;
+}
+
 /**
  * Create a Stripe Customer Portal session so the customer can manage their subscription.
  */
 async function createPortalSession({ customerId, returnUrl }) {
   const stripe = getStripe();
+  const configId = await getOrCreatePortalConfiguration();
   const session = await stripe.billingPortal.sessions.create({
     customer: customerId,
     return_url: returnUrl,
+    configuration: configId,
   });
   return { url: session.url };
 }
