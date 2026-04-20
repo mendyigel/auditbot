@@ -9,7 +9,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: APP_URL
-        value: https://orbiolab.com
+        value: https://auditbot-puin.onrender.com
     customDomains:
       - name: orbiolab.com
       - name: www.orbiolab.com
