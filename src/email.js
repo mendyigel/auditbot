@@ -312,6 +312,14 @@ function getStatus() {
   };
 }
 
+async function sendTest(to) {
+  return sendEmail({
+    to,
+    subject: 'OrbioLabs Email Test',
+    html: '<p>This is a test email from OrbioLabs. If you received this, email delivery is working.</p>',
+  });
+}
+
 module.exports = {
   sendWelcome,
   sendTrialDay3,
@@ -322,4 +330,5 @@ module.exports = {
   sendCancellation,
   sendPasswordReset,
   getStatus,
+  sendTest,
 };
