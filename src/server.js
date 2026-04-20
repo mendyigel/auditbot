@@ -607,7 +607,7 @@ app.get('/dashboard', (req, res) => {
 '    .nav-user { color: var(--muted); font-size: 0.875rem; }' +
 '    .signout-btn { background: none; border: 1px solid var(--border); color: var(--muted); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.875rem; }' +
 '    .signout-btn:hover { border-color: var(--muted); color: var(--text); }' +
-'    .dashboard { max-width: 640px; margin: 40px auto; padding: 0 24px; }' +
+'    .dashboard { max-width: 760px; margin: 40px auto; padding: 0 24px; }' +
 '    h1 { font-size: 1.75rem; font-weight: 800; margin-bottom: 24px; }' +
 '    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; }' +
 '    .card h2 { font-size: 1.125rem; font-weight: 700; margin-bottom: 16px; }' +
@@ -617,6 +617,30 @@ app.get('/dashboard', (req, res) => {
 '    .status-value { font-weight: 600; }' +
 '    .portal-link { display: block; width: 100%; text-align: center; padding: 12px; background: var(--brand); color: #fff; border-radius: 8px; font-weight: 700; margin-top: 20px; text-decoration: none; }' +
 '    .portal-link:hover { background: var(--brand-dark); }' +
+'    #audit-form { display: flex; gap: 10px; margin-bottom: 16px; }' +
+'    #audit-form input[type="url"] { flex: 1; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 1rem; outline: none; }' +
+'    #audit-form input[type="url"]:focus { border-color: var(--brand); }' +
+'    #audit-form input[type="url"]::placeholder { color: var(--muted); }' +
+'    #audit-form button { padding: 12px 24px; background: var(--brand); color: #fff; border: none; border-radius: 8px; font-size: 1rem; font-weight: 700; cursor: pointer; white-space: nowrap; }' +
+'    #audit-form button:hover { background: var(--brand-dark); }' +
+'    #audit-form button:disabled { opacity: 0.6; cursor: default; }' +
+'    #audit-error { display: none; margin-top: 8px; font-size: 0.9rem; color: #f87171; font-weight: 600; }' +
+'    #audit-results { display: none; margin-top: 20px; }' +
+'    .score-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 20px; }' +
+'    .score-card { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px; text-align: center; }' +
+'    .score-value { font-size: 2rem; font-weight: 800; line-height: 1; }' +
+'    .score-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }' +
+'    .score-good { color: #4ade80; }' +
+'    .score-mid { color: #facc15; }' +
+'    .score-bad { color: #f87171; }' +
+'    .report-links { display: flex; gap: 10px; margin-top: 16px; }' +
+'    .report-links a { flex: 1; text-align: center; padding: 10px; border-radius: 8px; font-weight: 600; font-size: 0.9rem; text-decoration: none; }' +
+'    .report-links .btn-primary { background: var(--brand); color: #fff; }' +
+'    .report-links .btn-outline { border: 1px solid var(--border); color: var(--text); }' +
+'    .issues-list { margin-top: 12px; }' +
+'    .issue-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; font-size: 0.85rem; color: var(--muted); }' +
+'    .issue-fail { color: #f87171; }' +
+'    .issue-pass { color: #4ade80; }' +
 '  </style>' +
 '</head>' +
 '<body>' +
@@ -629,6 +653,22 @@ app.get('/dashboard', (req, res) => {
 '</nav>' +
 '<div class="dashboard">' +
 '  <h1>Dashboard</h1>' +
+(sub && (sub.status === 'active' || sub.status === 'trialing') ?
+'  <div class="card">' +
+'    <h2>Run an Audit</h2>' +
+'    <p style="color:var(--muted);font-size:0.9rem;margin-bottom:16px">Enter a URL to get a full SEO, performance, and accessibility report.</p>' +
+'    <form id="audit-form" novalidate>' +
+'      <input type="url" name="url" placeholder="https://example.com" required />' +
+'      <button type="submit" id="audit-btn">Audit</button>' +
+'    </form>' +
+'    <div id="audit-error"></div>' +
+'    <div id="audit-results">' +
+'      <div class="score-grid" id="score-grid"></div>' +
+'      <div id="issues-container"></div>' +
+'      <div class="report-links" id="report-links"></div>' +
+'    </div>' +
+'  </div>'
+: '') +
 '  <div class="card">' +
 '    <h2>Account</h2>' +
 '    <div class="status-row"><span class="status-label">Username</span><span class="status-value">' + user.username + '</span></div>' +
@@ -636,6 +676,49 @@ app.get('/dashboard', (req, res) => {
 '  </div>' +
   subscriptionHtml +
 '</div>' +
+(sub && (sub.status === 'active' || sub.status === 'trialing') ?
+'<script>' +
+'(function(){' +
+'  var form=document.getElementById("audit-form");' +
+'  var btn=document.getElementById("audit-btn");' +
+'  var errEl=document.getElementById("audit-error");' +
+'  var resultsEl=document.getElementById("audit-results");' +
+'  function scoreClass(s){if(s>=80)return"score-good";if(s>=50)return"score-mid";return"score-bad";}' +
+'  function esc(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML;}' +
+'  form.addEventListener("submit",function(e){' +
+'    e.preventDefault();' +
+'    var url=form.elements["url"].value.trim();' +
+'    if(!url)return;' +
+'    btn.disabled=true;btn.textContent="Auditing…";' +
+'    errEl.style.display="none";resultsEl.style.display="none";' +
+'    fetch("/audit",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url})})' +
+'    .then(function(r){return r.json()})' +
+'    .then(function(data){' +
+'      btn.disabled=false;btn.textContent="Audit";' +
+'      if(data.error&&!data.scores){errEl.textContent=data.detail||data.error;errEl.style.display="block";return;}' +
+'      var s=data.scores;' +
+'      document.getElementById("score-grid").innerHTML=' +
+'        [{l:"Overall",v:s.overall},{l:"SEO",v:s.seo},{l:"Performance",v:s.performance},{l:"Accessibility",v:s.accessibility}]' +
+'        .map(function(x){return\'<div class="score-card"><div class="score-value \'+scoreClass(x.v)+\'">\'+x.v+\'</div><div class="score-label">\'+x.l+\'</div></div>\'}).join("");' +
+'      var ic=document.getElementById("issues-container");' +
+'      var sections=[{t:"SEO",d:data.seo},{t:"Performance",d:data.performance},{t:"Accessibility",d:data.accessibility}];' +
+'      ic.innerHTML=sections.map(function(sec){' +
+'        var items="";' +
+'        if(sec.d.issues&&sec.d.issues.length)items+=sec.d.issues.map(function(i){return\'<div class="issue-item"><span class="issue-fail">&#10007;</span> \'+esc(i)+\'</div>\'}).join("");' +
+'        if(sec.d.passes&&sec.d.passes.length)items+=sec.d.passes.slice(0,3).map(function(p){return\'<div class="issue-item"><span class="issue-pass">&#10003;</span> \'+esc(p)+\'</div>\'}).join("");' +
+'        return\'<div style="margin-bottom:12px"><h3 style="font-size:0.9rem;font-weight:700;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)">\'+sec.t+" ("+sec.d.score+"/100)</h3>"+items+"</div>"' +
+'      }).join("");' +
+'      var rl=document.getElementById("report-links");' +
+'      rl.innerHTML=data.reportUrl?' +
+'        \'<a href="\'+data.reportUrl+\'" target="_blank" class="btn-primary">View full report</a>\'+' +
+'        (data.pdfUrl?\'<a href="\'+data.pdfUrl+\'" class="btn-outline">Download PDF</a>\':""):"";' +
+'      resultsEl.style.display="block";' +
+'    })' +
+'    .catch(function(){btn.disabled=false;btn.textContent="Audit";errEl.textContent="Something went wrong. Please try again.";errEl.style.display="block";});' +
+'  });' +
+'})();' +
+'</script>'
+: '') +
 appPageAnalyticsSnippet('dashboard') +
 consentBannerSnippet() +
 '</body></html>');
