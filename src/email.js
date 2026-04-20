@@ -8,7 +8,8 @@
  *
  * Required env vars:
  *   RESEND_API_KEY   — re_… from Resend dashboard
- *   EMAIL_FROM       — sender address (default: "OrbioLabs <hello@orbiolab.com>")
+ *   EMAIL_FROM       — sender address (default: "OrbioLabs <onboarding@resend.dev>")
+ *                      Set to "OrbioLabs <support@orbiolab.com>" once domain is verified in Resend
  *   APP_URL          — public base URL (default: https://orbiolab.com)
  */
 
