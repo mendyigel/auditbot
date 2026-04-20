@@ -69,6 +69,15 @@ function generateHtml(audit) {
     .effort-tag { background: rgba(255,255,255,0.1); }
     .fix-why { font-size: 0.82rem; color: #cbd5e0; line-height: 1.4; }
     .fix-category { font-size: 0.7rem; color: #a0aec0; margin-top: 4px; }
+    .fix-howto { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); }
+    .fix-howto-title { font-size: 0.78rem; font-weight: 700; color: #e2e8f0; margin-bottom: 6px; }
+    .fix-howto ol { margin: 0 0 0 18px; padding: 0; }
+    .fix-howto ol li { font-size: 0.78rem; color: #cbd5e0; line-height: 1.5; margin-bottom: 3px; }
+    .fix-impact { font-size: 0.78rem; color: #68d391; margin-top: 6px; font-style: italic; }
+    .fix-platform-tip { margin-top: 8px; background: rgba(99,179,237,0.12); border-radius: 6px; padding: 8px 12px; }
+    .fix-platform-label { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; color: #63b3ed; letter-spacing: 0.5px; }
+    .fix-platform-text { font-size: 0.78rem; color: #bee3f8; margin-top: 3px; line-height: 1.45; }
+    .platform-badge { display: inline-block; font-size: 0.7rem; font-weight: 600; padding: 3px 10px; border-radius: 99px; background: rgba(99,179,237,0.2); color: #63b3ed; margin-left: 8px; }
     .interpretation-box { background: #edf2f7; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; font-size: 0.85rem; color: #2d3748; line-height: 1.5; }
     .interpretation-box strong { color: #1a1a2e; }
     footer { text-align: center; font-size: 0.75rem; color: #a0aec0; padding: 32px 0; }
@@ -93,8 +102,8 @@ function generateHtml(audit) {
     ${scoreCard('Accessibility', scores.accessibility, insights.scoreInterpretations.accessibility)}
   </div>
 
-  <!-- Top 5 Fixes -->
-  ${topFixesSection(insights.topFixes)}
+  <!-- Top Fixes with How-to-Fix Guidance -->
+  ${topFixesSection(insights.topFixes, insights.detectedPlatform)}
 
   <!-- Page metadata with interpretations -->
   <section>
@@ -188,10 +197,42 @@ function metricInterpretationBox(text) {
   return `<div class="interpretation-box">${escHtml(text)}</div>`;
 }
 
-function topFixesSection(fixes) {
+function topFixesSection(fixes, platform) {
   if (!fixes || fixes.length === 0) return '';
+
+  const platformLabel = {
+    wordpress: 'WordPress', shopify: 'Shopify', squarespace: 'Squarespace',
+    wix: 'Wix', nextjs: 'Next.js', custom: 'Custom', html: 'HTML',
+  };
+  const platformName = platformLabel[platform] || '';
+  const platformBadge = platform && platform !== 'html'
+    ? `<span class="platform-badge">Detected: ${escHtml(platformName)}</span>`
+    : '';
+
   const items = fixes.map((fix, i) => {
     const borderClass = `fix-${fix.severity}`;
+    const htf = fix.howToFix;
+
+    let howToFixHtml = '';
+    if (htf) {
+      const stepsHtml = htf.steps
+        ? `<ol>${htf.steps.map(s => `<li>${escHtml(s)}</li>`).join('')}</ol>`
+        : '';
+      const impactHtml = htf.estimatedImpact
+        ? `<div class="fix-impact">${escHtml(htf.estimatedImpact)}</div>`
+        : '';
+      const platformTipHtml = htf.platformTip
+        ? `<div class="fix-platform-tip"><div class="fix-platform-label">${escHtml(platformName)} tip</div><div class="fix-platform-text">${escHtml(htf.platformTip)}</div></div>`
+        : '';
+
+      howToFixHtml = `<div class="fix-howto">
+        <div class="fix-howto-title">How to Fix</div>
+        ${stepsHtml}
+        ${impactHtml}
+        ${platformTipHtml}
+      </div>`;
+    }
+
     return `<div class="fix-item ${borderClass}">
       <div class="fix-header">
         <span class="fix-title">#${i + 1} ${escHtml(fix.title)}</span>
@@ -202,11 +243,12 @@ function topFixesSection(fixes) {
       </div>
       <div class="fix-why">${escHtml(fix.why)}</div>
       <div class="fix-category">${escHtml(fix.category)}</div>
+      ${howToFixHtml}
     </div>`;
   }).join('');
 
   return `<div class="top-fixes">
-    <h2>🎯 Top ${fixes.length} Fixes — What to Do First</h2>
+    <h2>🎯 Top ${fixes.length} Fixes — What to Do First ${platformBadge}</h2>
     ${items}
   </div>`;
 }

@@ -15,6 +15,32 @@
 const { lookupSubscription, isActive, TRIAL_AUDIT_LIMIT, TRIAL_PDF_LIMIT, PLANS } = require('./billing');
 const db = require('./db');
 
+/**
+ * Resolve the API key from the request — checks Bearer token first, then session cookie.
+ * Returns { apiKey, user } or { apiKey: null, user: null }.
+ */
+function resolveApiKey(req) {
+  // 1. Bearer token takes priority (API / programmatic access)
+  const authHeader = req.headers['authorization'] || '';
+  if (authHeader.startsWith('Bearer ')) {
+    return { apiKey: authHeader.slice(7).trim(), user: null };
+  }
+
+  // 2. Session cookie (browser sign-in)
+  const sessionToken = req.cookies && req.cookies.session;
+  if (sessionToken) {
+    const user = db.getUserBySessionToken(sessionToken);
+    if (user && user.api_key) {
+      return { apiKey: user.api_key, user };
+    }
+    if (user) {
+      return { apiKey: null, user };
+    }
+  }
+
+  return { apiKey: null, user: null };
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TRIAL_DAYS = 14;
 
@@ -33,13 +59,13 @@ function requireActiveSubscription(req, res, next) {
     return next();
   }
 
-  const authHeader = req.headers['authorization'] || '';
-  const apiKey = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+  const { apiKey, user } = resolveApiKey(req);
 
   if (!apiKey) {
     return res.status(401).json({
       error: 'Unauthorized',
-      detail: 'Include your OrbioLabs API key as: Authorization: Bearer <your-api-key>',
+      detail: 'Sign in at /signin or include your API key as: Authorization: Bearer <your-api-key>',
+      signinUrl:    (process.env.APP_URL || '') + '/signin',
       trialUrl:    (process.env.APP_URL || '') + '/billing/trial',
       subscribeUrl: (process.env.APP_URL || '') + '/billing/checkout',
     });
@@ -147,4 +173,4 @@ function requirePdfAllowed(req, res, next) {
   next();
 }
 
-module.exports = { requireActiveSubscription, requirePdfAllowed };
+module.exports = { requireActiveSubscription, requirePdfAllowed, resolveApiKey };

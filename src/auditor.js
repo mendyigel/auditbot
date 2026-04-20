@@ -47,6 +47,9 @@ async function auditUrl(url, options = {}) {
   const contentType = (response.headers.get('content-type') || '').toLowerCase();
   const pageSizeBytes = Buffer.byteLength(html, 'utf8');
 
+  // ── Platform detection ──────────────────────────────────────────────────
+  const detectedPlatform = detectPlatform($, html, response);
+
   // ── SEO ──────────────────────────────────────────────────────────────────
   const title = $('title').first().text().trim();
   const metaDescription = $('meta[name="description"]').attr('content') || '';
@@ -192,6 +195,7 @@ async function auditUrl(url, options = {}) {
     statusCode,
     ttfbMs,
     pageSizeKb: +pageSizeKb.toFixed(1),
+    detectedPlatform,
     scores: {
       overall: overallScore,
       seo: seoScore,
@@ -243,6 +247,33 @@ async function auditUrl(url, options = {}) {
       issues: a11yIssues,
     },
   };
+}
+
+// ── Platform detection ───────────────────────────────────────────────────────
+
+function detectPlatform($, html, response) {
+  const generator = ($('meta[name="generator"]').attr('content') || '').toLowerCase();
+  const xPoweredBy = (response.headers.get('x-powered-by') || '').toLowerCase();
+
+  if (generator.includes('wordpress') || html.includes('/wp-content/') || html.includes('/wp-includes/')) {
+    return 'wordpress';
+  }
+  if (generator.includes('shopify') || html.includes('cdn.shopify.com')) {
+    return 'shopify';
+  }
+  if (generator.includes('squarespace') || html.includes('squarespace.com')) {
+    return 'squarespace';
+  }
+  if (generator.includes('wix') || html.includes('wix.com') || html.includes('parastorage.com')) {
+    return 'wix';
+  }
+  if (html.includes('__NEXT_DATA__') || html.includes('/_next/')) {
+    return 'nextjs';
+  }
+  if (xPoweredBy.includes('express') || xPoweredBy.includes('php') || xPoweredBy.includes('asp.net')) {
+    return 'custom';
+  }
+  return 'html';
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

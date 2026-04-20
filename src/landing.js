@@ -758,29 +758,13 @@ function generateLandingPage() {
     });
   }
 
-  // ── Pricing CTA — starts trial via Stripe ─────────────────────────────────
+  // ── Pricing CTA — redirect to sign-up with selected tier ───────────────────
   var trialBtns = document.querySelectorAll('[data-tier]');
   trialBtns.forEach(function (btn) {
     btn.addEventListener('click', function (e) {
       e.preventDefault();
       var tier = btn.getAttribute('data-tier') || 'starter';
-      var email = prompt('Enter your email to start a 14-day free trial:');
-      if (!email) return;
-      var origText = btn.textContent;
-      btn.textContent = 'Starting trial…';
-      fetch('/billing/trial', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email, tier: tier })
-      })
-      .then(function (r) { return r.ok ? r.json() : r.json().then(function (d) { return Promise.reject(d); }); })
-      .then(function (data) {
-        window.location.href = data.url;
-      })
-      .catch(function (err) {
-        btn.textContent = origText;
-        alert((err && err.error) ? err.error : 'Something went wrong. Please try again.');
-      });
+      window.location.href = '/signup?tier=' + encodeURIComponent(tier);
     });
   });
 })();

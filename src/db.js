@@ -52,8 +52,20 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    email         TEXT,
+    api_key       TEXT REFERENCES subscriptions(api_key),
+    session_token TEXT UNIQUE,
+    created_at    INTEGER NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at);
   CREATE INDEX IF NOT EXISTS idx_subs_customer   ON subscriptions(customer_id);
+  CREATE INDEX IF NOT EXISTS idx_users_username   ON users(username COLLATE NOCASE);
+  CREATE INDEX IF NOT EXISTS idx_users_session    ON users(session_token);
 `);
 
 // Migrate: add columns if they don't exist (safe on first run after upgrade)
@@ -116,6 +128,16 @@ const stmts = {
   incrMonthlyAuditCount: db.prepare(
     `UPDATE subscriptions SET monthly_audit_count = monthly_audit_count + 1 WHERE api_key = ?`
   ),
+
+  // Users
+  insertUser: db.prepare(
+    `INSERT INTO users (id, username, password_hash, email, api_key, session_token, created_at)
+     VALUES (@id, @username, @password_hash, @email, @api_key, @session_token, @created_at)`
+  ),
+  getUserByUsername: db.prepare(`SELECT * FROM users WHERE username = ? COLLATE NOCASE`),
+  getUserBySessionToken: db.prepare(`SELECT * FROM users WHERE session_token = ?`),
+  updateUserSession: db.prepare(`UPDATE users SET session_token = ? WHERE id = ?`),
+  linkUserApiKey: db.prepare(`UPDATE users SET api_key = ? WHERE id = ?`),
 };
 
 // ── Reports API ────────────────────────────────────────────────────────────────
@@ -263,6 +285,36 @@ function getMonthlyAuditCount(apiKey) {
   return sub.monthly_audit_count || 0;
 }
 
+// ── Users API ─────────────────────────────────────────────────────────────────
+
+function createUser({ id, username, passwordHash, email = null, apiKey = null, sessionToken = null }) {
+  stmts.insertUser.run({
+    id,
+    username,
+    password_hash: passwordHash,
+    email: email,
+    api_key: apiKey,
+    session_token: sessionToken,
+    created_at: Date.now(),
+  });
+}
+
+function getUserByUsername(username) {
+  return stmts.getUserByUsername.get(username) || null;
+}
+
+function getUserBySessionToken(token) {
+  return stmts.getUserBySessionToken.get(token) || null;
+}
+
+function updateUserSession(userId, sessionToken) {
+  stmts.updateUserSession.run(sessionToken, userId);
+}
+
+function linkUserApiKey(userId, apiKey) {
+  stmts.linkUserApiKey.run(apiKey, userId);
+}
+
 /** Cheap liveness check — throws if the DB connection is broken. */
 function ping() {
   db.prepare('SELECT 1').get();
@@ -286,4 +338,9 @@ module.exports = {
   updatePlanTier,
   incrementMonthlyAuditCount,
   getMonthlyAuditCount,
+  createUser,
+  getUserByUsername,
+  getUserBySessionToken,
+  updateUserSession,
+  linkUserApiKey,
 };

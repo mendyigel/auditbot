@@ -263,9 +263,11 @@ const authNavHtml = `<nav>
 // ── Sign-up page ─────────────────────────────────────────────────────────────
 
 app.get('/signup', (req, res) => {
-  const apiKey = req.query.api_key || '';
-  const trialBanner = apiKey
-    ? '<div style="background:rgba(52,211,153,0.15);border:1px solid rgba(52,211,153,0.3);border-radius:8px;padding:16px;margin-bottom:24px;color:var(--success);font-weight:600;font-size:0.9rem;">Your free trial is active! Create a username and password to access your account.</div>'
+  const tier = req.query.tier || '';
+  const validTier = (tier === 'starter' || tier === 'pro') ? tier : '';
+  const planNames = { starter: 'Starter ($9/mo)', pro: 'Pro ($29/mo)' };
+  const tierBanner = validTier
+    ? '<div style="background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.3);border-radius:8px;padding:16px;margin-bottom:24px;color:var(--brand);font-weight:600;font-size:0.9rem;">14-day free trial — ' + planNames[validTier] + '. You won\'t be charged today.</div>'
     : '';
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!DOCTYPE html>
@@ -281,17 +283,17 @@ ${authNavHtml}
 <div class="auth-container">
   <h1>Create your account</h1>
   <p class="subtitle">Sign up to get started with OrbioLabs website audits.</p>
-  ${trialBanner}
+  ${tierBanner}
   <form id="signup-form" novalidate>
-    <input type="hidden" id="api-key" value="${apiKey.replace(/"/g, '&quot;')}" />
+    <input type="hidden" id="tier" value="${validTier}" />
     <label for="username">Username</label>
     <input type="text" id="username" name="username" placeholder="johndoe" required autocomplete="username" />
     <label for="password">Password</label>
     <input type="password" id="password" name="password" placeholder="At least 8 characters" required autocomplete="new-password" />
     <p class="field-hint">Must be at least 8 characters long.</p>
-    <label for="email">Email <span style="color:var(--muted);font-weight:400">(optional)</span></label>
-    <input type="text" id="email" name="email" placeholder="you@example.com" autocomplete="email" />
-    <button type="submit" class="btn" id="signup-btn">Create account</button>
+    <label for="email">Email</label>
+    <input type="text" id="email" name="email" placeholder="you@example.com" required autocomplete="email" />
+    <button type="submit" class="btn" id="signup-btn">${validTier ? 'Create account &amp; start free trial' : 'Create account'}</button>
   </form>
   <div id="form-error" class="form-error"></div>
   <div id="form-success" class="form-success"></div>
@@ -303,14 +305,14 @@ ${authNavHtml}
   var btn = document.getElementById('signup-btn');
   var errEl = document.getElementById('form-error');
   var successEl = document.getElementById('form-success');
-  var apiKeyEl = document.getElementById('api-key');
+  var tierEl = document.getElementById('tier');
 
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     var username = document.getElementById('username').value.trim();
     var password = document.getElementById('password').value;
     var email = document.getElementById('email').value.trim();
-    var apiKey = apiKeyEl ? apiKeyEl.value : '';
+    var tier = tierEl ? tierEl.value : '';
     if (!username || !password) return;
     if (password.length < 8) {
       errEl.textContent = 'Password must be at least 8 characters.';
@@ -318,13 +320,20 @@ ${authNavHtml}
       successEl.style.display = 'none';
       return;
     }
+    if (tier && !email) {
+      errEl.textContent = 'Email is required to start a free trial.';
+      errEl.style.display = 'block';
+      successEl.style.display = 'none';
+      return;
+    }
     btn.disabled = true;
-    btn.textContent = 'Creating account…';
+    btn.textContent = tier ? 'Creating account…' : 'Creating account…';
     errEl.style.display = 'none';
     successEl.style.display = 'none';
 
-    var body = { username: username, password: password, email: email || undefined };
-    if (apiKey) body.apiKey = apiKey;
+    var body = { username: username, password: password };
+    if (email) body.email = email;
+    if (tier) body.tier = tier;
 
     fetch('/auth/signup', {
       method: 'POST',
@@ -335,12 +344,16 @@ ${authNavHtml}
       if (!r.ok) return r.json().then(function (d) { return Promise.reject(d); });
       return r.json();
     })
-    .then(function () {
-      window.location.href = '/dashboard';
+    .then(function (data) {
+      if (data.checkoutUrl) {
+        window.location.href = data.checkoutUrl;
+      } else {
+        window.location.href = '/dashboard';
+      }
     })
     .catch(function (err) {
       btn.disabled = false;
-      btn.textContent = 'Create account';
+      btn.textContent = tier ? 'Create account & start free trial' : 'Create account';
       errEl.textContent = (err && err.error) ? err.error : 'Sign-up failed. Please try again.';
       errEl.style.display = 'block';
     });
@@ -428,11 +441,13 @@ const BCRYPT_ROUNDS = 12;
 
 /**
  * POST /auth/signup
- * Body: { username, password, email? }
+ * Body: { username, password, email?, tier? }
  * Creates a new user account with hashed password, sets session cookie.
+ * If tier is provided (starter/pro), creates a Stripe trial checkout session
+ * and returns { checkoutUrl } so the client can redirect to Stripe.
  */
 app.post('/auth/signup', async (req, res) => {
-  const { username, password, email, apiKey } = req.body || {};
+  const { username, password, email, tier } = req.body || {};
 
   if (!username || typeof username !== 'string' || username.trim().length < 3) {
     return res.status(400).json({ error: 'Username must be at least 3 characters.' });
@@ -445,6 +460,12 @@ app.post('/auth/signup', async (req, res) => {
   }
   if (!/^[a-zA-Z0-9_.-]+$/.test(username.trim())) {
     return res.status(400).json({ error: 'Username may only contain letters, numbers, underscores, hyphens, and dots.' });
+  }
+  if (tier && tier !== 'starter' && tier !== 'pro') {
+    return res.status(400).json({ error: 'Invalid plan tier.' });
+  }
+  if (tier && !email) {
+    return res.status(400).json({ error: 'Email is required to start a free trial.' });
   }
 
   const trimmedUsername = username.trim();
@@ -463,7 +484,6 @@ app.post('/auth/signup', async (req, res) => {
       username: trimmedUsername,
       passwordHash,
       email: email || null,
-      apiKey: apiKey || null,
       sessionToken,
     });
 
@@ -473,6 +493,18 @@ app.post('/auth/signup', async (req, res) => {
       maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
       path: '/',
     });
+
+    // If a tier was selected, create Stripe trial checkout and redirect there
+    if (tier && process.env.STRIPE_SECRET_KEY) {
+      const base = process.env.APP_URL || `http://localhost:${PORT}`;
+      const { url } = await createTrialCheckoutSession({
+        email: email,
+        tier,
+        successUrl: `${base}/billing/trial/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancelUrl: `${base}/dashboard`,
+      });
+      return res.json({ ok: true, username: trimmedUsername, checkoutUrl: url });
+    }
 
     return res.json({ ok: true, username: trimmedUsername });
   } catch (err) {
@@ -674,19 +706,59 @@ app.post('/billing/trial', async (req, res) => {
 /**
  * GET /billing/trial/success
  * Landing page after a trial is started via Stripe Checkout.
+ * If the user has an active session (signed up before checkout), links the
+ * subscription API key to their user account and redirects to dashboard.
  */
 app.get('/billing/trial/success', async (req, res) => {
+  let apiKey = null;
   try {
     const result = await fulfillCheckoutSession(req.query.session_id);
     if (result && result.apiKey) {
-      // Redirect to sign-up with the API key so the user creates an account linked to their subscription
-      return res.redirect(`/signup?api_key=${encodeURIComponent(result.apiKey)}`);
+      apiKey = result.apiKey;
     }
   } catch (err) {
     console.error('[billing/trial/success] session retrieval failed:', err.message);
   }
-  // Fallback if fulfillment fails — redirect to sign-up without API key
-  res.redirect('/signup');
+
+  // If the user has a session cookie, link the API key to their account
+  const sessionToken = req.cookies && req.cookies.session;
+  if (sessionToken && apiKey) {
+    const user = db.getUserBySessionToken(sessionToken);
+    if (user) {
+      db.linkUserApiKey(user.id, apiKey);
+      return res.redirect('/dashboard');
+    }
+  }
+
+  // Fallback: show the API key (for users who arrived without a session)
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  const apiKeyHtml = apiKey
+    ? `<p>Your API key:</p><p><code>${apiKey}</code></p><p>Save this key — you'll need it to authenticate API requests.</p><p><a href="/signup">Create an account</a> to manage your subscription.</p>`
+    : '<p>Your trial is being activated. <a href="/signup">Create an account</a> to get started.</p>';
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>OrbioLabs — Trial Started</title>
+<style>body{font-family:system-ui,sans-serif;max-width:600px;margin:80px auto;padding:0 24px;color:#111}
+h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-size:1.1em;word-break:break-all}
+.trial-info{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:20px;margin:24px 0;}
+.trial-info ul{margin:8px 0 0 0;padding-left:20px;color:#15803d}</style>
+</head>
+<body>
+<h1>Your free trial is active!</h1>
+<div class="trial-info">
+  <strong>14-day free trial — no charge today</strong>
+  <ul>
+    <li>Up to 10 audits</li>
+    <li>Up to 3 PDF exports</li>
+    <li>Full SEO, performance &amp; accessibility checks</li>
+  </ul>
+</div>
+${apiKeyHtml}
+<p>You won't be charged until your trial ends. Cancel anytime before then at no cost.</p>
+<p><a href="/">Back to OrbioLabs</a></p>
+${appPageAnalyticsSnippet('billing/trial/success')}
+${consentBannerSnippet()}
+</body></html>`);
 });
 
 /**
@@ -745,15 +817,45 @@ app.get('/trial/status', (req, res) => {
  * Retrieves (or creates) the API key for the new customer and displays it.
  */
 app.get('/billing/success', async (req, res) => {
+  let apiKey = null;
   try {
     const result = await fulfillCheckoutSession(req.query.session_id);
     if (result && result.apiKey) {
-      return res.redirect(`/signup?api_key=${encodeURIComponent(result.apiKey)}`);
+      apiKey = result.apiKey;
     }
   } catch (err) {
     console.error('[billing/success] session retrieval failed:', err.message);
   }
-  res.redirect('/signup');
+
+  // Link API key to logged-in user if they have a session
+  const sessionToken = req.cookies && req.cookies.session;
+  if (sessionToken && apiKey) {
+    const user = db.getUserBySessionToken(sessionToken);
+    if (user) {
+      db.linkUserApiKey(user.id, apiKey);
+      return res.redirect('/dashboard');
+    }
+  }
+
+  // Fallback for users without a session
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  const apiKeyHtml = apiKey
+    ? `<p>Your API key:</p><p><code>${apiKey}</code></p><p>Save this key — you'll need it to authenticate API requests.</p><p><a href="/signup">Create an account</a> to manage your subscription.</p>`
+    : '<p>Your subscription is being activated. <a href="/signup">Create an account</a> to get started.</p>';
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>OrbioLabs — Subscription Active</title>
+<style>body{font-family:system-ui,sans-serif;max-width:600px;margin:80px auto;padding:0 24px;color:#111}
+h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-size:1.1em;word-break:break-all}</style>
+</head>
+<body>
+<h1>You're all set!</h1>
+<p>Your subscription is active.</p>
+${apiKeyHtml}
+<p><a href="/">Back to OrbioLabs</a></p>
+${appPageAnalyticsSnippet('billing/success')}
+${consentBannerSnippet()}
+</body></html>`);
 });
 
 /**

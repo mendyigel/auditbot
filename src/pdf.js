@@ -130,8 +130,8 @@ function buildDocDefinition(audit, opts) {
       // Score benchmark interpretations
       ...scoreInterpretationBlocks(insights.scoreInterpretations),
 
-      // Top Fixes section
-      ...topFixesBlocks(insights.topFixes),
+      // Top Fixes section with how-to-fix guidance
+      ...topFixesBlocks(insights.topFixes, insights.detectedPlatform),
 
       // Page info with metric interpretations
       sectionHeader('Page Info'),
@@ -277,64 +277,114 @@ function metricInterpretationBlocks(interpretations, keys) {
   return blocks;
 }
 
-function topFixesBlocks(fixes) {
+function topFixesBlocks(fixes, platform) {
   if (!fixes || fixes.length === 0) return [];
 
+  const platformLabels = {
+    wordpress: 'WordPress', shopify: 'Shopify', squarespace: 'Squarespace',
+    wix: 'Wix', nextjs: 'Next.js', custom: 'Custom', html: 'HTML',
+  };
+  const platformName = platformLabels[platform] || '';
+
   const blocks = [];
+
+  const headerText = platform && platform !== 'html'
+    ? [
+        { text: `Top ${fixes.length} Fixes — What to Do First  `, fontSize: 12, bold: true, color: WHITE },
+        { text: `Detected: ${platformName}`, fontSize: 8, bold: true, color: '#63b3ed' },
+      ]
+    : { text: `Top ${fixes.length} Fixes — What to Do First`, fontSize: 12, bold: true, color: WHITE };
+
   blocks.push({
     table: {
       widths: ['*'],
       body: [[{
         fillColor: NAVY,
         margin: [12, 10, 12, 10],
-        text: `Top ${fixes.length} Fixes — What to Do First`,
-        fontSize: 12,
-        bold: true,
-        color: WHITE,
+        text: headerText,
       }]],
     },
     layout: { hLineWidth: () => 0, vLineWidth: () => 0 },
     margin: [0, 8, 0, 4],
   });
 
-  const rows = fixes.map((fix, i) => [
-    {
-      margin: [4, 4, 4, 4],
-      stack: [
-        { text: `#${i + 1}`, fontSize: 10, bold: true, color: severityColour(fix.severity) },
-        { text: fix.impact.toUpperCase(), fontSize: 6, bold: true, color: severityColour(fix.severity), margin: [0, 2, 0, 0] },
-      ],
-      alignment: 'center',
-    },
-    {
-      margin: [4, 4, 4, 4],
-      stack: [
-        { text: fix.title, fontSize: 9, bold: true, color: NAVY },
-        { text: fix.why, fontSize: 7.5, color: GREY, margin: [0, 2, 0, 0] },
-        {
-          columns: [
-            { text: `${fix.category}`, fontSize: 6.5, color: GREY, width: 'auto' },
-            { text: `Effort: ${fix.effort}`, fontSize: 6.5, color: GREY, width: 'auto', margin: [8, 0, 0, 0] },
-          ],
-          margin: [0, 4, 0, 0],
-        },
-      ],
-    },
-  ]);
+  for (let i = 0; i < fixes.length; i++) {
+    const fix = fixes[i];
+    const htf = fix.howToFix;
 
-  blocks.push({
-    table: {
-      widths: [36, '*'],
-      body: rows,
-    },
-    layout: {
-      hLineWidth: (i, node) => (i === 0 || i === node.table.body.length ? 0 : 0.5),
-      vLineWidth: () => 0,
-      hLineColor: () => '#e2e8f0',
-      fillColor: (row) => (row % 2 === 0 ? '#fafafa' : WHITE),
-    },
-    margin: [0, 0, 0, 12],
-  });
+    // Fix header row
+    const fixStack = [
+      { text: fix.title, fontSize: 9, bold: true, color: NAVY },
+      { text: fix.why, fontSize: 7.5, color: GREY, margin: [0, 2, 0, 0] },
+      {
+        columns: [
+          { text: `${fix.category}`, fontSize: 6.5, color: GREY, width: 'auto' },
+          { text: `Effort: ${fix.effort}`, fontSize: 6.5, color: GREY, width: 'auto', margin: [8, 0, 0, 0] },
+        ],
+        margin: [0, 4, 0, 0],
+      },
+    ];
+
+    // Add how-to-fix steps
+    if (htf && htf.steps) {
+      fixStack.push({ text: 'How to Fix:', fontSize: 8, bold: true, color: NAVY, margin: [0, 6, 0, 2] });
+      fixStack.push({
+        ol: htf.steps.map(step => ({ text: step, fontSize: 7.5, color: '#4a5568', margin: [0, 0, 0, 1] })),
+        margin: [4, 0, 0, 0],
+      });
+
+      if (htf.estimatedImpact) {
+        fixStack.push({ text: htf.estimatedImpact, fontSize: 7.5, italics: true, color: GREEN, margin: [0, 4, 0, 0] });
+      }
+
+      if (htf.platformTip) {
+        fixStack.push({
+          table: {
+            widths: ['*'],
+            body: [[{
+              fillColor: '#ebf8ff',
+              margin: [6, 4, 6, 4],
+              stack: [
+                { text: `${platformName} Tip`, fontSize: 7, bold: true, color: '#2b6cb0' },
+                { text: htf.platformTip, fontSize: 7.5, color: '#2c5282', margin: [0, 2, 0, 0] },
+              ],
+            }]],
+          },
+          layout: { hLineWidth: () => 0, vLineWidth: () => 0 },
+          margin: [0, 4, 0, 0],
+        });
+      }
+    }
+
+    blocks.push({
+      table: {
+        widths: [36, '*'],
+        body: [[
+          {
+            margin: [4, 4, 4, 4],
+            stack: [
+              { text: `#${i + 1}`, fontSize: 10, bold: true, color: severityColour(fix.severity) },
+              { text: fix.impact.toUpperCase(), fontSize: 6, bold: true, color: severityColour(fix.severity), margin: [0, 2, 0, 0] },
+            ],
+            alignment: 'center',
+          },
+          {
+            margin: [4, 4, 4, 4],
+            stack: fixStack,
+          },
+        ]],
+      },
+      layout: {
+        hLineWidth: () => 0,
+        vLineWidth: () => 0,
+        fillColor: () => (i % 2 === 0 ? '#fafafa' : WHITE),
+      },
+      margin: [0, 0, 0, 2],
+    });
+  }
+
+  // Add a small spacer after fixes
+  blocks.push({ text: '', margin: [0, 0, 0, 8] });
 
   return blocks;
 }
