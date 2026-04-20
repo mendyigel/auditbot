@@ -214,6 +214,9 @@ app.get('/health', (_req, res) => {
   // Billing enabled (informational)
   checks.billing = !!process.env.STRIPE_SECRET_KEY ? 'enabled' : 'disabled';
 
+  // Email configuration (informational)
+  checks.email = emailService.getStatus();
+
   const payload = {
     status: allOk ? 'ok' : 'degraded',
     version: '1.0.0',

@@ -14,7 +14,7 @@
 
 const fetch = require('node-fetch');
 
-const FROM    = process.env.EMAIL_FROM || 'OrbioLabs <hello@orbiolab.com>';
+const FROM    = process.env.EMAIL_FROM || 'OrbioLabs <onboarding@resend.dev>';
 const APP_URL = process.env.APP_URL    || 'https://orbiolab.com';
 
 // ── Brand constants ───────────────────────────────────────────────────────────
@@ -303,6 +303,14 @@ If you didn't request this, you can safely ignore this email. Your password won'
   });
 }
 
+function getStatus() {
+  return {
+    configured: !!process.env.RESEND_API_KEY,
+    from: FROM,
+    appUrl: APP_URL,
+  };
+}
+
 module.exports = {
   sendWelcome,
   sendTrialDay3,
@@ -312,4 +320,5 @@ module.exports = {
   sendPaymentReceipt,
   sendCancellation,
   sendPasswordReset,
+  getStatus,
 };
