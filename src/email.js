@@ -286,6 +286,23 @@ async function sendTrialExpired(to)           { return sendEmail({ to, ...tplTri
 async function sendPaymentReceipt(to, opts)   { return sendEmail({ to, ...tplPaymentReceipt(opts) }); }
 async function sendCancellation(to)           { return sendEmail({ to, ...tplCancellation() }); }
 
+async function sendPasswordReset(to, { resetUrl }) {
+  return sendEmail({
+    to,
+    subject: 'Reset your OrbioLabs password',
+    html: `<div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;background:${B.dark};color:${B.offWhite};border-radius:12px">
+<h1 style="font-size:1.5rem;margin:0 0 16px;color:${B.offWhite}">Password Reset</h1>
+<p style="color:${B.slate};font-size:0.95rem;line-height:1.6;margin:0 0 24px">
+We received a request to reset your OrbioLabs password. Click the button below to choose a new password. This link expires in 1 hour.</p>
+<a href="${resetUrl}" style="display:inline-block;padding:14px 32px;background:${B.blue};color:#fff;border-radius:8px;font-weight:700;font-size:1rem;text-decoration:none">Reset password</a>
+<p style="color:${B.slate};font-size:0.85rem;line-height:1.6;margin:24px 0 0">
+If you didn't request this, you can safely ignore this email. Your password won't change.</p>
+<hr style="border:none;border-top:1px solid #334155;margin:24px 0" />
+<p style="color:${B.slate};font-size:0.8rem;margin:0">OrbioLabs &mdash; <a href="${APP_URL}" style="color:${B.blue}">orbiolab.com</a></p>
+</div>`,
+  });
+}
+
 module.exports = {
   sendWelcome,
   sendTrialDay3,
@@ -294,4 +311,5 @@ module.exports = {
   sendTrialExpired,
   sendPaymentReceipt,
   sendCancellation,
+  sendPasswordReset,
 };

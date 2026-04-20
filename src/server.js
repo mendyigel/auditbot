@@ -391,6 +391,7 @@ ${authNavHtml}
     <button type="submit" class="btn" id="signin-btn">Sign in</button>
   </form>
   <div id="form-error" class="form-error"></div>
+  <p class="alt-link" style="margin-bottom:12px"><a href="/auth/forgot-password">Forgot your password?</a></p>
   <p class="alt-link">Don't have an account? <a href="/signup">Sign up</a></p>
 </div>
 <script>
@@ -562,9 +563,226 @@ app.post('/auth/signout', (req, res) => {
   return res.json({ ok: true });
 });
 
+// ── Forgot / Reset Password ──────────────────────────────────────────────────
+
+const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+/**
+ * GET /auth/forgot-password
+ * Page with email input to request a password reset link.
+ */
+app.get('/auth/forgot-password', (_req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Forgot Password — OrbioLabs</title>
+  <style>${authPageStyles}</style>
+</head>
+<body>
+${authNavHtml}
+<div class="auth-container">
+  <h1>Reset your password</h1>
+  <p class="subtitle">Enter the email address you used to sign up and we'll send you a reset link.</p>
+  <form id="forgot-form" novalidate>
+    <label for="email">Email</label>
+    <input type="text" id="email" name="email" placeholder="you@example.com" required autocomplete="email" />
+    <button type="submit" class="btn" id="forgot-btn">Send reset link</button>
+  </form>
+  <div id="form-error" class="form-error"></div>
+  <div id="form-success" class="form-success"></div>
+  <p class="alt-link">Remember your password? <a href="/signin">Sign in</a></p>
+</div>
+<script>
+(function () {
+  var form = document.getElementById('forgot-form');
+  var btn = document.getElementById('forgot-btn');
+  var errEl = document.getElementById('form-error');
+  var successEl = document.getElementById('form-success');
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var email = document.getElementById('email').value.trim();
+    if (!email) return;
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    errEl.style.display = 'none';
+    successEl.style.display = 'none';
+    fetch('/auth/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email })
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      btn.disabled = false;
+      btn.textContent = 'Send reset link';
+      successEl.textContent = 'If an account with that email exists, we sent a reset link. Check your inbox.';
+      successEl.style.display = 'block';
+    })
+    .catch(function () {
+      btn.disabled = false;
+      btn.textContent = 'Send reset link';
+      successEl.textContent = 'If an account with that email exists, we sent a reset link. Check your inbox.';
+      successEl.style.display = 'block';
+    });
+  });
+})();
+</script>
+${appPageAnalyticsSnippet('forgot-password')}
+${consentBannerSnippet()}
+</body>
+</html>`);
+});
+
+/**
+ * POST /auth/forgot-password
+ * Body: { email }
+ * Generates a reset token and sends a reset email. Always returns 200
+ * to prevent email enumeration.
+ */
+app.post('/auth/forgot-password', async (req, res) => {
+  const { email } = req.body || {};
+  if (!email || typeof email !== 'string') {
+    return res.json({ ok: true }); // don't reveal whether email exists
+  }
+  const user = db.getUserByEmail(email.trim());
+  if (user) {
+    const token = crypto.randomBytes(32).toString('hex');
+    const expires = Date.now() + RESET_TOKEN_TTL_MS;
+    db.setResetToken(user.id, token, expires);
+    const base = process.env.APP_URL || 'http://localhost:' + PORT;
+    const resetUrl = base + '/auth/reset-password?token=' + token;
+    emailService.sendPasswordReset(user.email, { resetUrl }).catch((err) => {
+      console.error('[auth/forgot-password] email send failed:', err.message);
+    });
+  }
+  return res.json({ ok: true });
+});
+
+/**
+ * GET /auth/reset-password?token=...
+ * Page with new password form.
+ */
+app.get('/auth/reset-password', (req, res) => {
+  const token = req.query.token || '';
+  const user = token ? db.getUserByResetToken(token) : null;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  if (!user) {
+    return res.send('<!DOCTYPE html>' +
+'<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Invalid Link — OrbioLabs</title>' +
+'<style>' + authPageStyles + '</style></head><body>' +
+authNavHtml +
+'<div class="auth-container">' +
+'  <h1>Invalid or expired link</h1>' +
+'  <p class="subtitle">This password reset link is invalid or has expired. Please request a new one.</p>' +
+'  <a href="/auth/forgot-password" class="btn" style="display:block;text-align:center;text-decoration:none">Request new reset link</a>' +
+'</div></body></html>');
+  }
+  res.send('<!DOCTYPE html>' +
+'<html lang="en">' +
+'<head>' +
+'  <meta charset="UTF-8" />' +
+'  <meta name="viewport" content="width=device-width, initial-scale=1" />' +
+'  <title>Reset Password — OrbioLabs</title>' +
+'  <style>' + authPageStyles + '</style>' +
+'</head>' +
+'<body>' +
+authNavHtml +
+'<div class="auth-container">' +
+'  <h1>Set a new password</h1>' +
+'  <p class="subtitle">Enter your new password below.</p>' +
+'  <form id="reset-form" novalidate>' +
+'    <input type="hidden" id="token" value="' + token.replace(/"/g, '&quot;') + '" />' +
+'    <label for="password">New password</label>' +
+'    <input type="password" id="password" name="password" placeholder="At least 8 characters" required autocomplete="new-password" />' +
+'    <p class="field-hint">Must be at least 8 characters long.</p>' +
+'    <button type="submit" class="btn" id="reset-btn">Reset password</button>' +
+'  </form>' +
+'  <div id="form-error" class="form-error"></div>' +
+'  <div id="form-success" class="form-success"></div>' +
+'</div>' +
+'<script>' +
+'(function () {' +
+'  var form = document.getElementById("reset-form");' +
+'  var btn = document.getElementById("reset-btn");' +
+'  var errEl = document.getElementById("form-error");' +
+'  var successEl = document.getElementById("form-success");' +
+'  form.addEventListener("submit", function (e) {' +
+'    e.preventDefault();' +
+'    var password = document.getElementById("password").value;' +
+'    var token = document.getElementById("token").value;' +
+'    if (!password || password.length < 8) {' +
+'      errEl.textContent = "Password must be at least 8 characters.";' +
+'      errEl.style.display = "block";' +
+'      return;' +
+'    }' +
+'    btn.disabled = true;' +
+'    btn.textContent = "Resetting…";' +
+'    errEl.style.display = "none";' +
+'    successEl.style.display = "none";' +
+'    fetch("/auth/reset-password", {' +
+'      method: "POST",' +
+'      headers: { "Content-Type": "application/json" },' +
+'      body: JSON.stringify({ token: token, password: password })' +
+'    })' +
+'    .then(function (r) {' +
+'      if (!r.ok) return r.json().then(function (d) { return Promise.reject(d); });' +
+'      return r.json();' +
+'    })' +
+'    .then(function () {' +
+'      successEl.textContent = "Password reset successfully! Redirecting to sign in…";' +
+'      successEl.style.display = "block";' +
+'      setTimeout(function () { window.location.href = "/signin"; }, 2000);' +
+'    })' +
+'    .catch(function (err) {' +
+'      btn.disabled = false;' +
+'      btn.textContent = "Reset password";' +
+'      errEl.textContent = (err && err.error) ? err.error : "Reset failed. The link may have expired.";' +
+'      errEl.style.display = "block";' +
+'    });' +
+'  });' +
+'})();' +
+'</script>' +
+appPageAnalyticsSnippet('reset-password') +
+consentBannerSnippet() +
+'</body></html>');
+});
+
+/**
+ * POST /auth/reset-password
+ * Body: { token, password }
+ * Validates the reset token and updates the password.
+ */
+app.post('/auth/reset-password', async (req, res) => {
+  const { token, password } = req.body || {};
+  if (!token || !password) {
+    return res.status(400).json({ error: 'Token and new password are required.' });
+  }
+  if (typeof password !== 'string' || password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  }
+  const user = db.getUserByResetToken(token);
+  if (!user) {
+    return res.status(400).json({ error: 'Invalid or expired reset link. Please request a new one.' });
+  }
+  try {
+    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    db.updatePassword(user.id, passwordHash);
+    // Invalidate existing sessions for security
+    db.updateUserSession(user.id, null);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('[auth/reset-password error]', err);
+    return res.status(500).json({ error: 'Password reset failed. Please try again.' });
+  }
+});
+
 /**
  * GET /dashboard
  * Authenticated user dashboard — shows account info, subscription status, audit tools.
+ * Features tabbed navigation: Run Audit, My Reports, Account.
  */
 app.get('/dashboard', (req, res) => {
   const sessionToken = req.cookies && req.cookies.session;
@@ -573,7 +791,7 @@ app.get('/dashboard', (req, res) => {
   if (!user) return res.redirect('/signin');
 
   const sub = user.api_key ? lookupSubscription(user.api_key) : null;
-  const appUrl = process.env.APP_URL || '';
+  const hasActiveSub = sub && (sub.status === 'active' || sub.status === 'trialing');
 
   let subscriptionHtml = '';
   if (sub) {
@@ -589,139 +807,261 @@ app.get('/dashboard', (req, res) => {
   }
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send('<!DOCTYPE html>' +
-'<html lang="en">' +
-'<head>' +
-'  <meta charset="UTF-8" />' +
-'  <meta name="viewport" content="width=device-width, initial-scale=1" />' +
-'  <title>Dashboard — OrbioLabs</title>' +
-'  <style>' +
-'    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }' +
-'    :root { --brand: #3b82f6; --brand-dark: #2563eb; --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #f1f5f9; --muted: #94a3b8; }' +
-'    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }' +
-'    a { color: var(--brand); text-decoration: none; }' +
-'    nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 40px; border-bottom: 1px solid var(--border); }' +
-'    .logo { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.5px; color: var(--text); }' +
-'    .logo span { color: var(--brand); }' +
-'    .nav-right { display: flex; align-items: center; gap: 16px; }' +
-'    .nav-user { color: var(--muted); font-size: 0.875rem; }' +
-'    .signout-btn { background: none; border: 1px solid var(--border); color: var(--muted); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.875rem; }' +
-'    .signout-btn:hover { border-color: var(--muted); color: var(--text); }' +
-'    .dashboard { max-width: 760px; margin: 40px auto; padding: 0 24px; }' +
-'    h1 { font-size: 1.75rem; font-weight: 800; margin-bottom: 24px; }' +
-'    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; }' +
-'    .card h2 { font-size: 1.125rem; font-weight: 700; margin-bottom: 16px; }' +
-'    .status-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }' +
-'    .status-row:last-of-type { border: none; }' +
-'    .status-label { color: var(--muted); }' +
-'    .status-value { font-weight: 600; }' +
-'    .portal-link { display: block; width: 100%; text-align: center; padding: 12px; background: var(--brand); color: #fff; border-radius: 8px; font-weight: 700; margin-top: 20px; text-decoration: none; }' +
-'    .portal-link:hover { background: var(--brand-dark); }' +
-'    #audit-form { display: flex; gap: 10px; margin-bottom: 16px; }' +
-'    #audit-form input[type="url"] { flex: 1; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 1rem; outline: none; }' +
-'    #audit-form input[type="url"]:focus { border-color: var(--brand); }' +
-'    #audit-form input[type="url"]::placeholder { color: var(--muted); }' +
-'    #audit-form button { padding: 12px 24px; background: var(--brand); color: #fff; border: none; border-radius: 8px; font-size: 1rem; font-weight: 700; cursor: pointer; white-space: nowrap; }' +
-'    #audit-form button:hover { background: var(--brand-dark); }' +
-'    #audit-form button:disabled { opacity: 0.6; cursor: default; }' +
-'    #audit-error { display: none; margin-top: 8px; font-size: 0.9rem; color: #f87171; font-weight: 600; }' +
-'    #audit-results { display: none; margin-top: 20px; }' +
-'    .score-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 20px; }' +
-'    .score-card { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px; text-align: center; }' +
-'    .score-value { font-size: 2rem; font-weight: 800; line-height: 1; }' +
-'    .score-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }' +
-'    .score-good { color: #4ade80; }' +
-'    .score-mid { color: #facc15; }' +
-'    .score-bad { color: #f87171; }' +
-'    .report-links { display: flex; gap: 10px; margin-top: 16px; }' +
-'    .report-links a { flex: 1; text-align: center; padding: 10px; border-radius: 8px; font-weight: 600; font-size: 0.9rem; text-decoration: none; }' +
-'    .report-links .btn-primary { background: var(--brand); color: #fff; }' +
-'    .report-links .btn-outline { border: 1px solid var(--border); color: var(--text); }' +
-'    .issues-list { margin-top: 12px; }' +
-'    .issue-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; font-size: 0.85rem; color: var(--muted); }' +
-'    .issue-fail { color: #f87171; }' +
-'    .issue-pass { color: #4ade80; }' +
-'  </style>' +
-'</head>' +
-'<body>' +
-'<nav>' +
-'  <a href="/" style="text-decoration:none"><div class="logo">Orbio<span>Labs</span></div></a>' +
-'  <div class="nav-right">' +
-'    <span class="nav-user">' + user.username + '</span>' +
-'    <button class="signout-btn" onclick="fetch(\'/auth/signout\',{method:\'POST\'}).then(function(){window.location.href=\'/signin\'})">Sign out</button>' +
-'  </div>' +
-'</nav>' +
-'<div class="dashboard">' +
-'  <h1>Dashboard</h1>' +
-(sub && (sub.status === 'active' || sub.status === 'trialing') ?
-'  <div class="card">' +
-'    <h2>Run an Audit</h2>' +
-'    <p style="color:var(--muted);font-size:0.9rem;margin-bottom:16px">Enter a URL to get a full SEO, performance, and accessibility report.</p>' +
-'    <form id="audit-form" novalidate>' +
-'      <input type="url" name="url" placeholder="https://example.com" required />' +
-'      <button type="submit" id="audit-btn">Audit</button>' +
-'    </form>' +
-'    <div id="audit-error"></div>' +
-'    <div id="audit-results">' +
-'      <div class="score-grid" id="score-grid"></div>' +
-'      <div id="issues-container"></div>' +
-'      <div class="report-links" id="report-links"></div>' +
-'    </div>' +
-'  </div>'
-: '') +
-'  <div class="card">' +
-'    <h2>Account</h2>' +
-'    <div class="status-row"><span class="status-label">Username</span><span class="status-value">' + user.username + '</span></div>' +
-'    <div class="status-row"><span class="status-label">Email</span><span class="status-value">' + (user.email || '—') + '</span></div>' +
-'  </div>' +
-  subscriptionHtml +
-'</div>' +
-(sub && (sub.status === 'active' || sub.status === 'trialing') ?
-'<script>' +
-'(function(){' +
-'  var form=document.getElementById("audit-form");' +
-'  var btn=document.getElementById("audit-btn");' +
-'  var errEl=document.getElementById("audit-error");' +
-'  var resultsEl=document.getElementById("audit-results");' +
-'  function scoreClass(s){if(s>=80)return"score-good";if(s>=50)return"score-mid";return"score-bad";}' +
-'  function esc(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML;}' +
-'  form.addEventListener("submit",function(e){' +
-'    e.preventDefault();' +
-'    var url=form.elements["url"].value.trim();' +
-'    if(!url)return;' +
-'    btn.disabled=true;btn.textContent="Auditing…";' +
-'    errEl.style.display="none";resultsEl.style.display="none";' +
-'    fetch("/audit",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url})})' +
-'    .then(function(r){return r.json()})' +
-'    .then(function(data){' +
-'      btn.disabled=false;btn.textContent="Audit";' +
-'      if(data.error&&!data.scores){errEl.textContent=data.detail||data.error;errEl.style.display="block";return;}' +
-'      var s=data.scores;' +
-'      document.getElementById("score-grid").innerHTML=' +
-'        [{l:"Overall",v:s.overall},{l:"SEO",v:s.seo},{l:"Performance",v:s.performance},{l:"Accessibility",v:s.accessibility}]' +
-'        .map(function(x){return\'<div class="score-card"><div class="score-value \'+scoreClass(x.v)+\'">\'+x.v+\'</div><div class="score-label">\'+x.l+\'</div></div>\'}).join("");' +
-'      var ic=document.getElementById("issues-container");' +
-'      var sections=[{t:"SEO",d:data.seo},{t:"Performance",d:data.performance},{t:"Accessibility",d:data.accessibility}];' +
-'      ic.innerHTML=sections.map(function(sec){' +
-'        var items="";' +
-'        if(sec.d.issues&&sec.d.issues.length)items+=sec.d.issues.map(function(i){return\'<div class="issue-item"><span class="issue-fail">&#10007;</span> \'+esc(i)+\'</div>\'}).join("");' +
-'        if(sec.d.passes&&sec.d.passes.length)items+=sec.d.passes.slice(0,3).map(function(p){return\'<div class="issue-item"><span class="issue-pass">&#10003;</span> \'+esc(p)+\'</div>\'}).join("");' +
-'        return\'<div style="margin-bottom:12px"><h3 style="font-size:0.9rem;font-weight:700;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)">\'+sec.t+" ("+sec.d.score+"/100)</h3>"+items+"</div>"' +
-'      }).join("");' +
-'      var rl=document.getElementById("report-links");' +
-'      rl.innerHTML=data.reportUrl?' +
-'        \'<a href="\'+data.reportUrl+\'" target="_blank" class="btn-primary">View full report</a>\'+' +
-'        (data.pdfUrl?\'<a href="\'+data.pdfUrl+\'" class="btn-outline">Download PDF</a>\':""):"";' +
-'      resultsEl.style.display="block";' +
-'    })' +
-'    .catch(function(){btn.disabled=false;btn.textContent="Audit";errEl.textContent="Something went wrong. Please try again.";errEl.style.display="block";});' +
-'  });' +
-'})();' +
-'</script>'
-: '') +
-appPageAnalyticsSnippet('dashboard') +
-consentBannerSnippet() +
-'</body></html>');
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dashboard — OrbioLabs</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --brand: #3b82f6; --brand-dark: #2563eb; --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #f1f5f9; --muted: #94a3b8; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+    a { color: var(--brand); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .top-nav { display: flex; align-items: center; justify-content: space-between; padding: 16px 40px; border-bottom: 1px solid var(--border); }
+    .logo { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.5px; color: var(--text); text-decoration: none; }
+    .logo span { color: var(--brand); }
+    .nav-right { display: flex; align-items: center; gap: 16px; }
+    .nav-user { color: var(--muted); font-size: 0.875rem; }
+    .signout-btn { background: none; border: 1px solid var(--border); color: var(--muted); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.875rem; }
+    .signout-btn:hover { border-color: var(--muted); color: var(--text); }
+
+    /* Tab navigation */
+    .tab-nav { display: flex; gap: 0; border-bottom: 1px solid var(--border); padding: 0 40px; background: var(--surface); }
+    .tab-btn { padding: 14px 24px; font-size: 0.9rem; font-weight: 600; color: var(--muted); background: none; border: none; cursor: pointer; border-bottom: 2px solid transparent; transition: color 0.2s, border-color 0.2s; }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--brand); border-bottom-color: var(--brand); }
+
+    /* Tab content */
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .dashboard { max-width: 760px; margin: 32px auto; padding: 0 24px; }
+    h1 { font-size: 1.5rem; font-weight: 800; margin-bottom: 20px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+    .card h2 { font-size: 1.125rem; font-weight: 700; margin-bottom: 16px; }
+    .status-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+    .status-row:last-of-type { border: none; }
+    .status-label { color: var(--muted); }
+    .status-value { font-weight: 600; }
+    .portal-link { display: block; width: 100%; text-align: center; padding: 12px; background: var(--brand); color: #fff; border-radius: 8px; font-weight: 700; margin-top: 20px; text-decoration: none; }
+    .portal-link:hover { background: var(--brand-dark); text-decoration: none; }
+
+    /* Audit form */
+    #audit-form { display: flex; gap: 10px; margin-bottom: 16px; }
+    #audit-form input[type="url"] { flex: 1; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 1rem; outline: none; }
+    #audit-form input[type="url"]:focus { border-color: var(--brand); }
+    #audit-form input[type="url"]::placeholder { color: var(--muted); }
+    #audit-form button { padding: 12px 24px; background: var(--brand); color: #fff; border: none; border-radius: 8px; font-size: 1rem; font-weight: 700; cursor: pointer; white-space: nowrap; }
+    #audit-form button:hover { background: var(--brand-dark); }
+    #audit-form button:disabled { opacity: 0.6; cursor: default; }
+    #audit-error { display: none; margin-top: 8px; font-size: 0.9rem; color: #f87171; font-weight: 600; }
+    #audit-results { display: none; margin-top: 20px; }
+    .score-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .score-card { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px; text-align: center; }
+    .score-value { font-size: 2rem; font-weight: 800; line-height: 1; }
+    .score-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+    .score-good { color: #4ade80; }
+    .score-mid { color: #facc15; }
+    .score-bad { color: #f87171; }
+    .report-links { display: flex; gap: 10px; margin-top: 16px; }
+    .report-links a { flex: 1; text-align: center; padding: 10px; border-radius: 8px; font-weight: 600; font-size: 0.9rem; text-decoration: none; }
+    .report-links .btn-primary { background: var(--brand); color: #fff; }
+    .report-links .btn-outline { border: 1px solid var(--border); color: var(--text); }
+    .issues-list { margin-top: 12px; }
+    .issue-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; font-size: 0.85rem; color: var(--muted); }
+    .issue-fail { color: #f87171; }
+    .issue-pass { color: #4ade80; }
+
+    /* Reports table */
+    .reports-table { width: 100%; border-collapse: collapse; }
+    .reports-table th { text-align: left; font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    .reports-table td { padding: 12px; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+    .reports-table tr:last-child td { border-bottom: none; }
+    .reports-table a { color: var(--brand); font-weight: 500; }
+    .empty-state { text-align: center; padding: 48px 24px; color: var(--muted); }
+    .empty-state p { margin-bottom: 16px; }
+    .no-sub-cta { text-align: center; padding: 40px 24px; }
+    .no-sub-cta h2 { font-size: 1.25rem; margin-bottom: 12px; }
+    .no-sub-cta p { color: var(--muted); margin-bottom: 24px; }
+    .cta-btn { display: inline-block; padding: 14px 32px; background: var(--brand); color: #fff; border-radius: 8px; font-weight: 700; text-decoration: none; }
+    .cta-btn:hover { background: var(--brand-dark); text-decoration: none; }
+  </style>
+</head>
+<body>
+<div class="top-nav">
+  <a href="/" style="text-decoration:none"><div class="logo">Orbio<span>Labs</span></div></a>
+  <div class="nav-right">
+    <span class="nav-user">${user.username}</span>
+    <button class="signout-btn" onclick="fetch('/auth/signout',{method:'POST'}).then(function(){window.location.href='/signin'})">Sign out</button>
+  </div>
+</div>
+<div class="tab-nav">
+  <button class="tab-btn active" data-tab="audit">Run Audit</button>
+  <button class="tab-btn" data-tab="reports">My Reports</button>
+  <button class="tab-btn" data-tab="account">Account</button>
+</div>
+<div class="dashboard">
+  <!-- Tab: Run Audit -->
+  <div class="tab-content active" id="tab-audit">
+    ${hasActiveSub ? `
+    <div class="card">
+      <h2>Run an Audit</h2>
+      <p style="color:var(--muted);font-size:0.9rem;margin-bottom:16px">Enter a URL to get a full SEO, performance, and accessibility report.</p>
+      <form id="audit-form" novalidate>
+        <input type="url" name="url" placeholder="https://example.com" required />
+        <button type="submit" id="audit-btn">Audit</button>
+      </form>
+      <div id="audit-error"></div>
+      <div id="audit-results">
+        <div class="score-grid" id="score-grid"></div>
+        <div id="issues-container"></div>
+        <div class="report-links" id="report-links"></div>
+      </div>
+    </div>
+    ` : `
+    <div class="no-sub-cta">
+      <h2>Start auditing your websites</h2>
+      <p>Get detailed SEO, performance, and accessibility reports. Start your 14-day free trial to begin.</p>
+      <a href="/#pricing" class="cta-btn">Start free trial</a>
+    </div>
+    `}
+  </div>
+
+  <!-- Tab: My Reports -->
+  <div class="tab-content" id="tab-reports">
+    <div class="card">
+      <h2>My Reports</h2>
+      <div id="reports-list">
+        <p style="color:var(--muted);font-size:0.9rem">Loading reports...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: Account -->
+  <div class="tab-content" id="tab-account">
+    <div class="card">
+      <h2>Account</h2>
+      <div class="status-row"><span class="status-label">Username</span><span class="status-value">${user.username}</span></div>
+      <div class="status-row"><span class="status-label">Email</span><span class="status-value">${user.email || '—'}</span></div>
+    </div>
+    ${subscriptionHtml}
+  </div>
+</div>
+<script>
+(function(){
+  // Tab switching
+  var tabs = document.querySelectorAll('.tab-btn');
+  var contents = document.querySelectorAll('.tab-content');
+  tabs.forEach(function(tab){
+    tab.addEventListener('click', function(){
+      tabs.forEach(function(t){ t.classList.remove('active'); });
+      contents.forEach(function(c){ c.classList.remove('active'); });
+      tab.classList.add('active');
+      document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+      // Load reports on first visit to reports tab
+      if(tab.dataset.tab === 'reports' && !window._reportsLoaded){
+        window._reportsLoaded = true;
+        loadReports();
+      }
+    });
+  });
+
+  // Load reports
+  function loadReports(){
+    var container = document.getElementById('reports-list');
+    fetch('/api/my-reports')
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        if(!data.reports || data.reports.length === 0){
+          container.innerHTML = '<div class="empty-state"><p>No reports yet.</p><p>Run your first audit to see results here.</p></div>';
+          return;
+        }
+        var html = '<table class="reports-table"><thead><tr><th>URL</th><th>Date</th><th>Actions</th></tr></thead><tbody>';
+        data.reports.forEach(function(r){
+          var d = new Date(r.createdAt);
+          var dateStr = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+          var shortUrl = r.url.replace(/^https?:\\/\\//, '').slice(0, 40);
+          html += '<tr><td title="' + r.url.replace(/"/g,'&quot;') + '">' + shortUrl + '</td><td style="white-space:nowrap;color:var(--muted)">' + dateStr + '</td><td><a href="/report/' + r.id + '" target="_blank">View</a></td></tr>';
+        });
+        html += '</tbody></table>';
+        container.innerHTML = html;
+      })
+      .catch(function(){
+        container.innerHTML = '<p style="color:#f87171">Failed to load reports.</p>';
+      });
+  }
+
+  ${hasActiveSub ? `
+  // Audit form
+  var form = document.getElementById('audit-form');
+  var btn = document.getElementById('audit-btn');
+  var errEl = document.getElementById('audit-error');
+  var resultsEl = document.getElementById('audit-results');
+  function scoreClass(s){if(s>=80)return"score-good";if(s>=50)return"score-mid";return"score-bad";}
+  function esc(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML;}
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    var url = form.elements["url"].value.trim();
+    if(!url) return;
+    btn.disabled=true; btn.textContent="Auditing…";
+    errEl.style.display="none"; resultsEl.style.display="none";
+    fetch("/audit",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url})})
+    .then(function(r){return r.json()})
+    .then(function(data){
+      btn.disabled=false; btn.textContent="Audit";
+      if(data.error && !data.scores){errEl.textContent=data.detail||data.error;errEl.style.display="block";return;}
+      var s=data.scores;
+      document.getElementById("score-grid").innerHTML=
+        [{l:"Overall",v:s.overall},{l:"SEO",v:s.seo},{l:"Performance",v:s.performance},{l:"Accessibility",v:s.accessibility}]
+        .map(function(x){return '<div class="score-card"><div class="score-value '+scoreClass(x.v)+'">'+x.v+'</div><div class="score-label">'+x.l+'</div></div>'}).join("");
+      var ic=document.getElementById("issues-container");
+      var sections=[{t:"SEO",d:data.seo},{t:"Performance",d:data.performance},{t:"Accessibility",d:data.accessibility}];
+      ic.innerHTML=sections.map(function(sec){
+        var items="";
+        if(sec.d.issues&&sec.d.issues.length)items+=sec.d.issues.map(function(i){return '<div class="issue-item"><span class="issue-fail">&#10007;</span> '+esc(i)+'</div>'}).join("");
+        if(sec.d.passes&&sec.d.passes.length)items+=sec.d.passes.slice(0,3).map(function(p){return '<div class="issue-item"><span class="issue-pass">&#10003;</span> '+esc(p)+'</div>'}).join("");
+        return '<div style="margin-bottom:12px"><h3 style="font-size:0.9rem;font-weight:700;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)">'+sec.t+" ("+sec.d.score+"/100)</h3>"+items+"</div>"
+      }).join("");
+      var rl=document.getElementById("report-links");
+      rl.innerHTML=data.reportUrl?
+        '<a href="'+data.reportUrl+'" target="_blank" class="btn-primary">View full report</a>'+
+        (data.pdfUrl?'<a href="'+data.pdfUrl+'" class="btn-outline">Download PDF</a>':""):"";
+      resultsEl.style.display="block";
+      // Invalidate reports cache so next tab visit reloads
+      window._reportsLoaded = false;
+    })
+    .catch(function(){btn.disabled=false;btn.textContent="Audit";errEl.textContent="Something went wrong. Please try again.";errEl.style.display="block";});
+  });
+  ` : ''}
+
+  // Handle hash-based tab routing
+  var hash = window.location.hash.replace('#','');
+  if(hash && document.querySelector('[data-tab="'+hash+'"]')){
+    document.querySelector('[data-tab="'+hash+'"]').click();
+  }
+})();
+</script>
+${appPageAnalyticsSnippet('dashboard')}
+${consentBannerSnippet()}
+</body>
+</html>`);
+});
+
+// ── My Reports API ───────────────────────────────────────────────────────────
+
+/**
+ * GET /api/my-reports
+ * Returns JSON array of the logged-in user's recent audit reports.
+ */
+app.get('/api/my-reports', (req, res) => {
+  const sessionToken = req.cookies && req.cookies.session;
+  if (!sessionToken) return res.status(401).json({ error: 'Not authenticated' });
+  const user = db.getUserBySessionToken(sessionToken);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  const reports = db.getReportsByUser(user.id);
+  return res.json({ reports });
 });
 
 // ── Billing routes ────────────────────────────────────────────────────────────
@@ -1111,7 +1451,10 @@ app.post('/audit', requireActiveSubscription, async (req, res) => {
     // Persist the HTML report and raw audit data
     const reportId = uuidv4();
     const storageKey = await saveReport(reportId, html);
-    db.saveReportMeta({ id: reportId, url: targetUrl, storageKey, audit });
+    // Resolve user ID from session for report history
+    const _sessionToken = req.cookies && req.cookies.session;
+    const _sessionUser = _sessionToken ? db.getUserBySessionToken(_sessionToken) : null;
+    db.saveReportMeta({ id: reportId, url: targetUrl, storageKey, audit, userId: _sessionUser ? _sessionUser.id : null });
 
     // Track audit count for trial email triggers and monthly limits
     if (req.subscription?.apiKey) {

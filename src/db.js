@@ -75,17 +75,22 @@ try { db.exec(`ALTER TABLE subscriptions ADD COLUMN pdf_count    INTEGER NOT NUL
 try { db.exec(`ALTER TABLE subscriptions ADD COLUMN plan_tier    TEXT    NOT NULL DEFAULT 'pro'`); } catch (_) {}
 try { db.exec(`ALTER TABLE subscriptions ADD COLUMN monthly_audit_count INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
 try { db.exec(`ALTER TABLE subscriptions ADD COLUMN monthly_reset_at    INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
+try { db.exec(`ALTER TABLE reports ADD COLUMN user_id TEXT`); } catch (_) {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_reports_user ON reports(user_id)`); } catch (_) {}
+try { db.exec(`ALTER TABLE users ADD COLUMN reset_token TEXT`); } catch (_) {}
+try { db.exec(`ALTER TABLE users ADD COLUMN reset_token_expires INTEGER`); } catch (_) {}
 
 // ── Report helpers ─────────────────────────────────────────────────────────────
 
 const stmts = {
   insertReport: db.prepare(
-    `INSERT INTO reports (id, url, storage_key, audit_json, created_at)
-     VALUES (@id, @url, @storage_key, @audit_json, @created_at)`
+    `INSERT INTO reports (id, url, storage_key, audit_json, created_at, user_id)
+     VALUES (@id, @url, @storage_key, @audit_json, @created_at, @user_id)`
   ),
   getReport: db.prepare(`SELECT * FROM reports WHERE id = ?`),
   deleteReport: db.prepare(`DELETE FROM reports WHERE id = ?`),
   pruneReports: db.prepare(`DELETE FROM reports WHERE created_at < ?`),
+  getReportsByUser: db.prepare(`SELECT id, url, created_at FROM reports WHERE user_id = ? ORDER BY created_at DESC LIMIT 50`),
 
   // Waitlist
   insertWaitlist: db.prepare(
@@ -138,18 +143,31 @@ const stmts = {
   getUserBySessionToken: db.prepare(`SELECT * FROM users WHERE session_token = ?`),
   updateUserSession: db.prepare(`UPDATE users SET session_token = ? WHERE id = ?`),
   linkUserApiKey: db.prepare(`UPDATE users SET api_key = ? WHERE id = ?`),
+  getUserByEmail: db.prepare(`SELECT * FROM users WHERE email = ? COLLATE NOCASE`),
+  setResetToken: db.prepare(`UPDATE users SET reset_token = ?, reset_token_expires = ? WHERE id = ?`),
+  getUserByResetToken: db.prepare(`SELECT * FROM users WHERE reset_token = ?`),
+  updatePassword: db.prepare(`UPDATE users SET password_hash = ?, reset_token = NULL, reset_token_expires = NULL WHERE id = ?`),
 };
 
 // ── Reports API ────────────────────────────────────────────────────────────────
 
-function saveReportMeta({ id, url, storageKey, audit }) {
+function saveReportMeta({ id, url, storageKey, audit, userId = null }) {
   stmts.insertReport.run({
     id,
     url,
     storage_key: storageKey,
     audit_json: JSON.stringify(audit),
     created_at: Date.now(),
+    user_id: userId,
   });
+}
+
+function getReportsByUser(userId) {
+  return stmts.getReportsByUser.all(userId).map(row => ({
+    id: row.id,
+    url: row.url,
+    createdAt: row.created_at,
+  }));
 }
 
 function getReportMeta(id) {
@@ -315,6 +333,25 @@ function linkUserApiKey(userId, apiKey) {
   stmts.linkUserApiKey.run(apiKey, userId);
 }
 
+function getUserByEmail(email) {
+  return stmts.getUserByEmail.get(email) || null;
+}
+
+function setResetToken(userId, token, expiresAt) {
+  stmts.setResetToken.run(token, expiresAt, userId);
+}
+
+function getUserByResetToken(token) {
+  const user = stmts.getUserByResetToken.get(token);
+  if (!user) return null;
+  if (user.reset_token_expires && Date.now() > user.reset_token_expires) return null;
+  return user;
+}
+
+function updatePassword(userId, passwordHash) {
+  stmts.updatePassword.run(passwordHash, userId);
+}
+
 /** Cheap liveness check — throws if the DB connection is broken. */
 function ping() {
   db.prepare('SELECT 1').get();
@@ -324,6 +361,7 @@ module.exports = {
   ping,
   saveReportMeta,
   getReportMeta,
+  getReportsByUser,
   deleteReportMeta,
   pruneOldReports,
   saveWaitlistEmail,
@@ -343,4 +381,8 @@ module.exports = {
   getUserBySessionToken,
   updateUserSession,
   linkUserApiKey,
+  getUserByEmail,
+  setResetToken,
+  getUserByResetToken,
+  updatePassword,
 };
