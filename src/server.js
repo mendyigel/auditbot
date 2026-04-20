@@ -34,6 +34,14 @@ const emailService = require('./email');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const IS_PRODUCTION = (process.env.APP_URL || '').startsWith('https');
+
+/** Cookie options with secure flag in production */
+function cookieOpts(extra = {}) {
+  const opts = { httpOnly: true, sameSite: 'lax', path: '/', ...extra };
+  if (IS_PRODUCTION) opts.secure = true;
+  return opts;
+}
 
 // Report TTL — default 30 days; set REPORT_TTL_DAYS env var to override
 const REPORT_TTL_MS = (parseInt(process.env.REPORT_TTL_DAYS, 10) || 30) * 24 * 60 * 60 * 1000;
@@ -280,8 +288,11 @@ const authNavHtml = `<nav>
 app.get('/signup', (req, res) => {
   const tier = req.query.tier || '';
   const validTier = (tier === 'starter' || tier === 'pro') ? tier : '';
+  const trialStarted = req.query.trial_started === '1';
   const planNames = { starter: 'Starter ($9/mo)', pro: 'Pro ($29/mo)' };
-  const tierBanner = validTier
+  const tierBanner = trialStarted
+    ? '<div style="background:rgba(22,163,74,0.1);border:1px solid rgba(22,163,74,0.3);border-radius:8px;padding:16px;margin-bottom:24px;color:#15803d;font-weight:600;font-size:0.9rem;">Your free trial is active! Create an account to access your dashboard and start running audits.</div>'
+    : validTier
     ? '<div style="background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.3);border-radius:8px;padding:16px;margin-bottom:24px;color:var(--brand);font-weight:600;font-size:0.9rem;">14-day free trial — ' + planNames[validTier] + '. You won\'t be charged today.</div>'
     : '';
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -503,12 +514,14 @@ app.post('/auth/signup', async (req, res) => {
       sessionToken,
     });
 
-    res.cookie('session', sessionToken, {
-      httpOnly: true,
-      sameSite: 'lax',
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-      path: '/',
-    });
+    res.cookie('session', sessionToken, cookieOpts({ maxAge: 30 * 24 * 60 * 60 * 1000 }));
+
+    // If a pending trial API key exists (from Stripe checkout before signup), link it now
+    const pendingKey = req.cookies && req.cookies.pending_trial_key;
+    if (pendingKey) {
+      db.linkUserApiKey(userId, pendingKey);
+      res.clearCookie('pending_trial_key', { path: '/' });
+    }
 
     // If a tier was selected, create Stripe trial checkout and redirect there
     if (tier && process.env.STRIPE_SECRET_KEY) {
@@ -554,12 +567,14 @@ app.post('/auth/signin', async (req, res) => {
   const sessionToken = crypto.randomBytes(32).toString('hex');
   db.updateUserSession(user.id, sessionToken);
 
-  res.cookie('session', sessionToken, {
-    httpOnly: true,
-    sameSite: 'lax',
-    maxAge: 30 * 24 * 60 * 60 * 1000,
-    path: '/',
-  });
+  res.cookie('session', sessionToken, cookieOpts({ maxAge: 30 * 24 * 60 * 60 * 1000 }));
+
+  // Link pending trial key if present (user completed Stripe before signing in)
+  const pendingKey = req.cookies && req.cookies.pending_trial_key;
+  if (pendingKey && !user.api_key) {
+    db.linkUserApiKey(user.id, pendingKey);
+    res.clearCookie('pending_trial_key', { path: '/' });
+  }
 
   return res.json({ ok: true, username: user.username });
 });
@@ -1168,35 +1183,12 @@ app.get('/billing/trial/success', async (req, res) => {
     }
   }
 
-  // Fallback: show the API key (for users who arrived without a session)
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  const apiKeyHtml = apiKey
-    ? `<p>Your API key:</p><p><code>${apiKey}</code></p><p>Save this key — you'll need it to authenticate API requests.</p><p><a href="/signup">Create an account</a> to manage your subscription.</p>`
-    : '<p>Your trial is being activated. <a href="/signup">Create an account</a> to get started.</p>';
-  res.send(`<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><title>OrbioLabs — Trial Started</title>
-<style>body{font-family:system-ui,sans-serif;max-width:600px;margin:80px auto;padding:0 24px;color:#111}
-h1{color:#16a34a}code{background:#f4f4f5;padding:4px 8px;border-radius:4px;font-size:1.1em;word-break:break-all}
-.trial-info{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:20px;margin:24px 0;}
-.trial-info ul{margin:8px 0 0 0;padding-left:20px;color:#15803d}</style>
-</head>
-<body>
-<h1>Your free trial is active!</h1>
-<div class="trial-info">
-  <strong>14-day free trial — no charge today</strong>
-  <ul>
-    <li>Up to 10 audits</li>
-    <li>Up to 3 PDF exports</li>
-    <li>Full SEO, performance &amp; accessibility checks</li>
-  </ul>
-</div>
-${apiKeyHtml}
-<p>You won't be charged until your trial ends. Cancel anytime before then at no cost.</p>
-<p><a href="/">Back to OrbioLabs</a></p>
-${appPageAnalyticsSnippet('billing/trial/success')}
-${consentBannerSnippet()}
-</body></html>`);
+  // No session: store the API key in a short-lived cookie and redirect to signup
+  // so the user creates an account first, then the key gets auto-linked.
+  if (apiKey) {
+    res.cookie('pending_trial_key', apiKey, cookieOpts({ maxAge: 30 * 60 * 1000, httpOnly: true }));
+  }
+  return res.redirect('/signup?trial_started=1');
 });
 
 /**
