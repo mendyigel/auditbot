@@ -223,9 +223,12 @@ async function handleWebhook(rawBody, signature) {
       db.updatePlanTier(customerId, tier);
       console.log('[stripe] checkout complete — customer:', customerId, '— tier:', tier, '— apiKey:', apiKey);
       if (customerEmail) {
+        const receiptOpts = tier === 'starter'
+          ? { amount: '$9.00', plan: 'OrbioLabs Starter' }
+          : { amount: '$29.00', plan: 'OrbioLabs Pro' };
         Promise.all([
           email.sendWelcome(customerEmail, { apiKey }),
-          email.sendPaymentReceipt(customerEmail),
+          email.sendPaymentReceipt(customerEmail, receiptOpts),
         ]).catch((err) => console.error('[email] checkout emails failed:', err.message));
       }
       break;

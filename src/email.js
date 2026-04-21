@@ -188,7 +188,7 @@ function tplTrialDay10() {
     html: layout(`
       ${h1('4 days left on your trial')}
       ${p('Your 14-day trial ends in 4 days. After that, your API key will stop working unless you upgrade.')}
-      ${btn('Upgrade Now &mdash; $29/month', `${APP_URL}/billing/checkout`)}
+      ${btn('Upgrade Now &mdash; from $9/month', `${APP_URL}/billing/checkout`)}
       ${hr()}
       ${p('<strong>What you keep with a paid plan:</strong><br>&bull; Unlimited audits<br>&bull; Unlimited PDF exports<br>&bull; 90-day report storage (vs. 7-day trial)<br>&bull; Scheduled recurring audits<br>&bull; Multi-site dashboard<br>&bull; API access')}
       ${p('Questions? Reply to this email &mdash; we read every one.')}
@@ -222,7 +222,7 @@ function tplTrialExpired() {
     html: layout(`
       ${h1('Your trial has ended')}
       ${p('Your 14-day OrbioLabs trial expired today. Your API key is now paused &mdash; past reports are still accessible for 30 days.')}
-      ${btn('Reactivate for $29/month', `${APP_URL}/billing/checkout`)}
+      ${btn('Reactivate &mdash; from $9/month', `${APP_URL}/billing/checkout`)}
       ${hr()}
       ${p('Reactivate and pick up exactly where you left off. Your report history and API key are restored immediately.')}
       ${p('This offer expires in 30 days, after which your data will be deleted.')}
