@@ -6,6 +6,8 @@ const Sentry = require('./monitoring');
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { auditUrl } = require('./auditor');
+const { crawlSite } = require('./crawler');
+const { benchmarkCompetitors } = require('./competitor');
 const { generateHtml } = require('./report');
 const { generatePdf } = require('./pdf');
 const {
@@ -31,6 +33,9 @@ const { generateBlogIndex, generateBlogPost } = require('./blog');
 const { consentBannerSnippet } = require('./consent-banner');
 const { appPageAnalyticsSnippet, trackServerEvent } = require('./analytics');
 const emailService = require('./email');
+const { mapKeywordOpportunities } = require('./keywords');
+const { analyzeContentGaps } = require('./content-gap');
+const { frameRoi } = require('./roi');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -177,7 +182,12 @@ app.get('/api', (_req, res) => {
     version: '1.0.0',
     description: 'OrbioLabs — Automated SEO, performance & accessibility audits with shareable HTML reports',
     endpoints: {
-      'POST /audit': 'Run an audit (requires API key). Body: { url, format? } — format: json|html|pdf',
+      'POST /audit': 'Run a single-page audit (requires API key). Body: { url, format? } — format: json|html|pdf',
+      'POST /audit/site': 'Multi-page site crawl + audit (requires API key). Body: { url, maxPages? }',
+      'POST /audit/competitors': 'Competitor benchmarking (requires API key). Body: { url, competitors: string[] }',
+      'POST /audit/keywords': 'Keyword opportunity mapping — Pro plan only. Body: { url, maxKeywords? }',
+      'POST /audit/content-gaps': 'Content gap analysis — Pro plan only. Body: { url, competitors: string[], maxGaps? }',
+      'POST /audit/full': 'Full audit: page audit + site crawl + competitor benchmarking + Tier 2 (Pro). Body: { url, competitors?, maxPages?, format?, industry? }',
       'GET /audit?url=…': 'Browser-friendly audit (requires API key)',
       'GET /report/:id': 'View a cached HTML report by ID',
       'GET /report/:id/pdf': 'Download white-label PDF report (optional ?agency=Name&agencyUrl=…)',
@@ -1580,6 +1590,273 @@ app.get('/audit', requireActiveSubscription, async (req, res) => {
     return res.send(html);
   } catch (err) {
     return res.status(500).json({ error: 'Audit failed', detail: err.message });
+  }
+});
+
+/**
+ * POST /audit/site
+ * Multi-page site crawl + audit. Crawls internal links and returns site-wide
+ * structural analysis including orphan pages, duplicate content, and indexation gaps.
+ * Body: { url: string, maxPages?: number }
+ */
+app.post('/audit/site', requireActiveSubscription, async (req, res) => {
+  const { url, maxPages } = req.body || {};
+
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'Missing required field: url' });
+  }
+
+  let targetUrl = url.trim();
+  if (!/^https?:\/\//i.test(targetUrl)) {
+    targetUrl = 'https://' + targetUrl;
+  }
+
+  try {
+    // Run single-page audit + site crawl in parallel
+    const [audit, crawl] = await Promise.all([
+      auditUrl(targetUrl),
+      crawlSite(targetUrl, { maxPages: Math.min(maxPages || 25, 50) }),
+    ]);
+
+    // Track usage
+    if (req.subscription?.apiKey) {
+      db.incrementAuditCount(req.subscription.apiKey);
+      db.incrementMonthlyAuditCount(req.subscription.apiKey);
+    }
+    trackServerEvent('audit_run', { format: 'site_crawl' }, req).catch(() => {});
+
+    const trialInfo = req.subscription ? getTrialInfo(req.subscription) : null;
+    return res.json({ audit, crawl, trial: trialInfo });
+  } catch (err) {
+    console.error('[site audit error]', err);
+    return res.status(500).json({ error: 'Site audit failed', detail: err.message });
+  }
+});
+
+/**
+ * POST /audit/competitors
+ * Competitor benchmarking. Compares the target domain against 3-5 competitors.
+ * Body: { url: string, competitors: string[] }
+ */
+app.post('/audit/competitors', requireActiveSubscription, async (req, res) => {
+  const { url, competitors } = req.body || {};
+
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'Missing required field: url' });
+  }
+  if (!competitors || !Array.isArray(competitors) || competitors.length === 0) {
+    return res.status(400).json({ error: 'Missing required field: competitors (array of domain URLs)' });
+  }
+  if (competitors.length > 5) {
+    return res.status(400).json({ error: 'Maximum 5 competitor domains allowed' });
+  }
+
+  let targetUrl = url.trim();
+  if (!/^https?:\/\//i.test(targetUrl)) {
+    targetUrl = 'https://' + targetUrl;
+  }
+
+  try {
+    const result = await benchmarkCompetitors(targetUrl, competitors);
+
+    if (req.subscription?.apiKey) {
+      db.incrementAuditCount(req.subscription.apiKey);
+      db.incrementMonthlyAuditCount(req.subscription.apiKey);
+    }
+    trackServerEvent('audit_run', { format: 'competitor_benchmark' }, req).catch(() => {});
+
+    const trialInfo = req.subscription ? getTrialInfo(req.subscription) : null;
+    return res.json({ ...result, trial: trialInfo });
+  } catch (err) {
+    console.error('[competitor benchmark error]', err);
+    return res.status(500).json({ error: 'Competitor benchmark failed', detail: err.message });
+  }
+});
+
+/**
+ * Middleware: require Pro plan for Tier 2 features.
+ * In dev mode (no Stripe), allows all requests through.
+ */
+function requireProPlan(req, res, next) {
+  if (!process.env.STRIPE_SECRET_KEY) return next();
+  const sub = req.subscription;
+  if (!sub) return next();
+  if (sub.planTier === 'starter') {
+    const appUrl = process.env.APP_URL || '';
+    return res.status(402).json({
+      error: 'Pro plan required',
+      detail: 'Keyword mapping, content gap analysis, and ROI insights are available on the Pro plan.',
+      plan: 'starter',
+      upgradeUrl: `${appUrl}/billing/checkout?tier=pro`,
+    });
+  }
+  next();
+}
+
+/**
+ * POST /audit/keywords
+ * Keyword opportunity mapping. Surfaces pages ranking in positions 8-20
+ * that are worth optimizing. Pro plan only.
+ * Body: { url: string, maxKeywords?: number }
+ */
+app.post('/audit/keywords', requireActiveSubscription, requireProPlan, async (req, res) => {
+  const { url, maxKeywords } = req.body || {};
+
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'Missing required field: url' });
+  }
+
+  let targetUrl = url.trim();
+  if (!/^https?:\/\//i.test(targetUrl)) {
+    targetUrl = 'https://' + targetUrl;
+  }
+
+  try {
+    const result = await mapKeywordOpportunities(targetUrl, null, { maxKeywords });
+
+    if (req.subscription?.apiKey) {
+      db.incrementAuditCount(req.subscription.apiKey);
+      db.incrementMonthlyAuditCount(req.subscription.apiKey);
+    }
+    trackServerEvent('audit_run', { format: 'keyword_mapping' }, req).catch(() => {});
+
+    const trialInfo = req.subscription ? getTrialInfo(req.subscription) : null;
+    return res.json({ ...result, trial: trialInfo });
+  } catch (err) {
+    console.error('[keyword mapping error]', err);
+    return res.status(500).json({ error: 'Keyword mapping failed', detail: err.message });
+  }
+});
+
+/**
+ * POST /audit/content-gaps
+ * Content gap analysis. Identifies topics competitors rank for that the
+ * target site does not cover. Pro plan only.
+ * Body: { url: string, competitors: string[], maxGaps?: number }
+ */
+app.post('/audit/content-gaps', requireActiveSubscription, requireProPlan, async (req, res) => {
+  const { url, competitors, maxGaps } = req.body || {};
+
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'Missing required field: url' });
+  }
+  if (!competitors || !Array.isArray(competitors) || competitors.length === 0) {
+    return res.status(400).json({ error: 'Missing required field: competitors (array of domain URLs)' });
+  }
+  if (competitors.length > 5) {
+    return res.status(400).json({ error: 'Maximum 5 competitor domains allowed' });
+  }
+
+  let targetUrl = url.trim();
+  if (!/^https?:\/\//i.test(targetUrl)) {
+    targetUrl = 'https://' + targetUrl;
+  }
+
+  try {
+    const result = await analyzeContentGaps(targetUrl, competitors, null, { maxGaps });
+
+    if (req.subscription?.apiKey) {
+      db.incrementAuditCount(req.subscription.apiKey);
+      db.incrementMonthlyAuditCount(req.subscription.apiKey);
+    }
+    trackServerEvent('audit_run', { format: 'content_gap_analysis' }, req).catch(() => {});
+
+    const trialInfo = req.subscription ? getTrialInfo(req.subscription) : null;
+    return res.json({ ...result, trial: trialInfo });
+  } catch (err) {
+    console.error('[content gap analysis error]', err);
+    return res.status(500).json({ error: 'Content gap analysis failed', detail: err.message });
+  }
+});
+
+/**
+ * POST /audit/full
+ * Full audit: single-page audit + site crawl + competitor benchmarking.
+ * Pro plan users also get: keyword mapping, content gap analysis, ROI framing.
+ * Body: { url: string, competitors?: string[], maxPages?: number, format?: 'json'|'html', industry?: string }
+ */
+app.post('/audit/full', requireActiveSubscription, async (req, res) => {
+  const { url, competitors = [], maxPages, format = 'json', industry } = req.body || {};
+
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'Missing required field: url' });
+  }
+
+  let targetUrl = url.trim();
+  if (!/^https?:\/\//i.test(targetUrl)) {
+    targetUrl = 'https://' + targetUrl;
+  }
+
+  // Determine if this user has Pro plan features
+  const isProPlan = !process.env.STRIPE_SECRET_KEY || !req.subscription || req.subscription.planTier !== 'starter';
+
+  try {
+    const tasks = [
+      auditUrl(targetUrl),
+      crawlSite(targetUrl, { maxPages: Math.min(maxPages || 25, 50) }),
+    ];
+    if (competitors.length > 0) {
+      tasks.push(benchmarkCompetitors(targetUrl, competitors.slice(0, 5)));
+    }
+
+    const results = await Promise.all(tasks);
+    const audit = results[0];
+    const crawl = results[1];
+    const competitor = results[2] || null;
+
+    // Tier 2: keyword mapping, content gap analysis, ROI framing (Pro plan only)
+    let keywords = null;
+    let contentGaps = null;
+    let roi = null;
+
+    if (isProPlan) {
+      const tier2Tasks = [
+        mapKeywordOpportunities(targetUrl, crawl).catch(err => {
+          console.error('[full audit] keyword mapping error:', err.message);
+          return null;
+        }),
+      ];
+      if (competitors.length > 0) {
+        tier2Tasks.push(
+          analyzeContentGaps(targetUrl, competitors.slice(0, 5), crawl).catch(err => {
+            console.error('[full audit] content gap error:', err.message);
+            return null;
+          })
+        );
+      }
+
+      const tier2Results = await Promise.all(tier2Tasks);
+      keywords = tier2Results[0];
+      contentGaps = tier2Results[1] || null;
+
+      // ROI framing wraps everything together
+      roi = frameRoi(audit, { crawl, competitor, keywords, contentGaps }, { industry });
+    }
+
+    // Generate enhanced HTML report if requested
+    if (format === 'html') {
+      const html = generateHtml(audit, { crawl, competitor, keywords, contentGaps, roi });
+      const reportId = uuidv4();
+      const storageKey = await saveReport(reportId, html);
+      const _sessionToken = req.cookies && req.cookies.session;
+      const _sessionUser = _sessionToken ? db.getUserBySessionToken(_sessionToken) : null;
+      db.saveReportMeta({ id: reportId, url: targetUrl, storageKey, audit, userId: _sessionUser ? _sessionUser.id : null });
+
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(html);
+    }
+
+    if (req.subscription?.apiKey) {
+      db.incrementAuditCount(req.subscription.apiKey);
+      db.incrementMonthlyAuditCount(req.subscription.apiKey);
+    }
+    trackServerEvent('audit_run', { format: 'full_audit' }, req).catch(() => {});
+
+    const trialInfo = req.subscription ? getTrialInfo(req.subscription) : null;
+    return res.json({ audit, crawl, competitor, keywords, contentGaps, roi, trial: trialInfo });
+  } catch (err) {
+    console.error('[full audit error]', err);
+    return res.status(500).json({ error: 'Full audit failed', detail: err.message });
   }
 });
 

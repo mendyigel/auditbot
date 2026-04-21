@@ -4,14 +4,17 @@ const { enrichAudit } = require('./interpret');
 
 /**
  * Generates a self-contained HTML report from an audit result object.
+ * @param {object} audit - The single-page audit result
+ * @param {object} [extras] - Optional extras: { crawl, competitor }
  */
-function generateHtml(audit) {
+function generateHtml(audit, extras) {
   if (audit.error) {
     return errorPage(audit);
   }
 
+  extras = extras || {};
   const { scores, seo, performance: perf, accessibility: a11y } = audit;
-  const insights = enrichAudit(audit);
+  const insights = enrichAudit(audit, extras);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -81,7 +84,49 @@ function generateHtml(audit) {
     .interpretation-box { background: #edf2f7; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; font-size: 0.85rem; color: #2d3748; line-height: 1.5; }
     .interpretation-box strong { color: #1a1a2e; }
     footer { text-align: center; font-size: 0.75rem; color: #a0aec0; padding: 32px 0; }
-    @media (max-width: 600px) { .meta-grid { grid-template-columns: 1fr; } }
+    .crawl-section { background: linear-gradient(135deg, #1e3a5f 0%, #2d3748 100%); border-radius: 12px; padding: 24px; margin-bottom: 24px; color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+    .crawl-section h2 { color: #fff; font-size: 1.1rem; margin-bottom: 16px; }
+    .crawl-stat { display: inline-block; background: rgba(255,255,255,0.1); border-radius: 8px; padding: 12px 20px; margin: 0 8px 8px 0; text-align: center; }
+    .crawl-stat-value { font-size: 1.8rem; font-weight: 800; color: #63b3ed; }
+    .crawl-stat-label { font-size: 0.72rem; color: #a0aec0; text-transform: uppercase; letter-spacing: 0.5px; }
+    .crawl-issue { background: rgba(255,255,255,0.08); border-radius: 8px; padding: 14px; margin-bottom: 10px; border-left: 4px solid; }
+    .crawl-issue-critical { border-left-color: #e53e3e; }
+    .crawl-issue-high { border-left-color: #ed8936; }
+    .crawl-issue-medium { border-left-color: #d69e2e; }
+    .crawl-issue h4 { font-size: 0.9rem; font-weight: 700; margin-bottom: 4px; }
+    .crawl-issue p { font-size: 0.8rem; color: #cbd5e0; line-height: 1.4; }
+    .crawl-issue .page-list { font-size: 0.75rem; color: #a0aec0; margin-top: 6px; }
+    .competitor-section { background: linear-gradient(135deg, #2d1b4e 0%, #1a1a2e 100%); border-radius: 12px; padding: 24px; margin-bottom: 24px; color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+    .competitor-section h2 { color: #fff; font-size: 1.1rem; margin-bottom: 16px; }
+    .comp-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-bottom: 16px; }
+    .comp-table th { text-align: left; padding: 8px 12px; border-bottom: 2px solid rgba(255,255,255,0.2); color: #a0aec0; font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.5px; }
+    .comp-table td { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+    .comp-table tr.target-row { background: rgba(99,179,237,0.12); }
+    .comp-insight { background: rgba(255,255,255,0.06); border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; font-size: 0.82rem; line-height: 1.45; }
+    .comp-strength { border-left: 3px solid #38a169; }
+    .comp-weakness { border-left: 3px solid #e53e3e; }
+    .comp-opportunity { border-left: 3px solid #d69e2e; }
+    .traffic-bar { display: inline-block; height: 6px; border-radius: 3px; background: #63b3ed; margin-right: 6px; vertical-align: middle; }
+    .keyword-section { background: linear-gradient(135deg, #1a3a2e 0%, #1a1a2e 100%); border-radius: 12px; padding: 24px; margin-bottom: 24px; color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+    .keyword-section h2 { color: #fff; font-size: 1.1rem; margin-bottom: 16px; }
+    .kw-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-bottom: 16px; }
+    .kw-table th { text-align: left; padding: 8px 12px; border-bottom: 2px solid rgba(255,255,255,0.2); color: #a0aec0; font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.5px; }
+    .kw-table td { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+    .kw-quickwin { background: rgba(56,161,105,0.15); }
+    .gap-section { background: linear-gradient(135deg, #3a1a2e 0%, #1a1a2e 100%); border-radius: 12px; padding: 24px; margin-bottom: 24px; color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+    .gap-section h2 { color: #fff; font-size: 1.1rem; margin-bottom: 16px; }
+    .roi-section { background: linear-gradient(135deg, #0d4f3c 0%, #1a3a2e 100%); border-radius: 12px; padding: 24px; margin-bottom: 24px; color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+    .roi-section h2 { color: #fff; font-size: 1.1rem; margin-bottom: 16px; }
+    .roi-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 20px; }
+    .roi-stat { background: rgba(255,255,255,0.1); border-radius: 8px; padding: 16px; text-align: center; }
+    .roi-stat-value { font-size: 2rem; font-weight: 800; color: #68d391; }
+    .roi-stat-label { font-size: 0.72rem; color: #a0aec0; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+    .roi-rec { background: rgba(255,255,255,0.06); border-radius: 8px; padding: 14px; margin-bottom: 10px; border-left: 4px solid #68d391; }
+    .roi-rec h4 { font-size: 0.88rem; font-weight: 700; margin-bottom: 4px; }
+    .roi-rec p { font-size: 0.8rem; color: #cbd5e0; line-height: 1.4; }
+    .roi-rec .roi-value { font-weight: 700; color: #68d391; }
+    .difficulty-easy { color: #68d391; } .difficulty-moderate { color: #ecc94b; } .difficulty-challenging { color: #ed8936; } .difficulty-hard { color: #fc8181; }
+    @media (max-width: 600px) { .meta-grid { grid-template-columns: 1fr; } .comp-table { font-size: 0.72rem; } .comp-table th, .comp-table td { padding: 6px 8px; } .kw-table { font-size: 0.72rem; } .roi-summary-grid { grid-template-columns: 1fr 1fr; } }
   </style>
 </head>
 <body>
@@ -167,6 +212,12 @@ function generateHtml(audit) {
     </dl>
     ${checkListWithSeverity(a11y.passes, insights.a11yIssuesClassified)}
   </section>
+
+  ${crawlSection(extras.crawl, insights.crawlSummary)}
+  ${competitorSection(extras.competitor)}
+  ${keywordSection(extras.keywords, insights.keywordSummary)}
+  ${contentGapSection(extras.contentGaps, insights.contentGapSummary)}
+  ${roiSection(extras.roi, insights.roiSummary, insights.roiRecommendations)}
 </div>
 
 <footer>Generated by <strong>OrbioLabs</strong> · ${audit.auditedAt}</footer>
@@ -276,6 +327,203 @@ function escHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function crawlSection(crawl, crawlSummary) {
+  if (!crawl) return '';
+
+  const statsHtml = `
+    <div style="margin-bottom:16px">
+      <div class="crawl-stat"><div class="crawl-stat-value">${crawl.pagesCrawled}</div><div class="crawl-stat-label">Pages Crawled</div></div>
+      <div class="crawl-stat"><div class="crawl-stat-value">${(crawl.orphanPages || []).length}</div><div class="crawl-stat-label">Orphan Pages</div></div>
+      <div class="crawl-stat"><div class="crawl-stat-value">${(crawl.duplicateTitles || []).length}</div><div class="crawl-stat-label">Duplicate Titles</div></div>
+      <div class="crawl-stat"><div class="crawl-stat-value">${(crawl.indexationIssues || []).length}</div><div class="crawl-stat-label">Indexation Issues</div></div>
+      <div class="crawl-stat"><div class="crawl-stat-value">${(crawl.thinContentPages || []).length}</div><div class="crawl-stat-label">Thin Content</div></div>
+    </div>`;
+
+  let issuesHtml = '';
+  if (crawlSummary && crawlSummary.issues && crawlSummary.issues.length > 0) {
+    issuesHtml = crawlSummary.issues.map(issue => {
+      const severityClass = `crawl-issue-${issue.severity}`;
+      const trafficBar = `<span class="traffic-bar" style="width:${issue.trafficImpact}px"></span> ${issue.trafficImpact}/100 traffic impact`;
+      const pageList = issue.pages
+        ? `<div class="page-list">${issue.pages.slice(0, 5).map(p => escHtml(p)).join('<br>')}</div>`
+        : issue.items
+        ? `<div class="page-list">${issue.items.slice(0, 3).map(item => escHtml(typeof item === 'string' ? item : JSON.stringify(item))).join('<br>')}</div>`
+        : '';
+      return `<div class="crawl-issue ${severityClass}">
+        <h4>${escHtml(issue.title)}</h4>
+        <p>${escHtml(issue.description)}</p>
+        <p style="margin-top:4px;font-size:0.75rem">${trafficBar}</p>
+        ${pageList}
+      </div>`;
+    }).join('');
+  }
+
+  return `<div class="crawl-section">
+    <h2>🕷️ Site Crawl Analysis (${crawl.pagesCrawled} pages)</h2>
+    ${statsHtml}
+    ${issuesHtml || '<p style="color:#a0aec0">No site-wide issues detected across crawled pages.</p>'}
+  </div>`;
+}
+
+function competitorSection(competitor) {
+  if (!competitor) return '';
+
+  const target = competitor.target;
+  const competitors = competitor.competitors || [];
+  const comparison = competitor.comparison || {};
+
+  if (!target || target.error) return '';
+
+  // Build comparison table
+  const allDomains = [target, ...competitors.filter(c => !c.error)];
+  const tableRows = allDomains.map(d => {
+    const isTarget = d.isTarget;
+    const rowClass = isTarget ? 'target-row' : '';
+    const authScore = d.authorityProxy?.score || 0;
+    return `<tr class="${rowClass}">
+      <td>${escHtml(d.domain)}${isTarget ? ' <strong>(you)</strong>' : ''}</td>
+      <td>${authScore}/100</td>
+      <td>${d.ttfbMs || '-'}ms</td>
+      <td>${d.wordCount || 0}</td>
+      <td>${d.internalLinks || 0}</td>
+      <td>${d.hasStructuredData ? 'Yes' : 'No'}</td>
+      <td>${d.isHttps ? 'Yes' : 'No'}</td>
+    </tr>`;
+  }).join('');
+
+  const tableHtml = `<table class="comp-table">
+    <thead><tr><th>Domain</th><th>SEO Score</th><th>TTFB</th><th>Words</th><th>Internal Links</th><th>Structured Data</th><th>HTTPS</th></tr></thead>
+    <tbody>${tableRows}</tbody>
+  </table>`;
+
+  // Insights
+  let insightsHtml = '';
+  if (comparison.strengths && comparison.strengths.length > 0) {
+    insightsHtml += comparison.strengths.map(s =>
+      `<div class="comp-insight comp-strength">${escHtml(s)}</div>`
+    ).join('');
+  }
+  if (comparison.weaknesses && comparison.weaknesses.length > 0) {
+    insightsHtml += comparison.weaknesses.map(w =>
+      `<div class="comp-insight comp-weakness">${escHtml(w)}</div>`
+    ).join('');
+  }
+  if (comparison.opportunities && comparison.opportunities.length > 0) {
+    insightsHtml += comparison.opportunities.map(o =>
+      `<div class="comp-insight comp-opportunity">${escHtml(o)}</div>`
+    ).join('');
+  }
+
+  return `<div class="competitor-section">
+    <h2>🏆 Competitor Benchmarking</h2>
+    <p style="font-size:0.85rem;color:#cbd5e0;margin-bottom:16px">${escHtml(comparison.summary || '')}</p>
+    ${tableHtml}
+    ${insightsHtml}
+  </div>`;
+}
+
+function keywordSection(keywords, summary) {
+  if (!keywords || !summary || summary.totalOpportunities === 0) return '';
+
+  const opps = summary.topOpportunities || [];
+  const rowsHtml = opps.map(o => {
+    const diffClass = `difficulty-${o.difficulty || 'moderate'}`;
+    const isQuickWin = o.currentPosition >= 8 && o.currentPosition <= 12;
+    return `<tr class="${isQuickWin ? 'kw-quickwin' : ''}">
+      <td>${escHtml(o.keyword)}</td>
+      <td>${o.searchVolume ? o.searchVolume.toLocaleString() : '—'}</td>
+      <td>#${o.currentPosition}</td>
+      <td>#${o.targetPosition}</td>
+      <td>+${o.estimatedMonthlyTrafficGain}</td>
+      <td class="${diffClass}">${o.difficulty || '—'}</td>
+    </tr>`;
+  }).join('');
+
+  return `<div class="keyword-section">
+    <h2>🎯 Keyword Opportunities</h2>
+    <div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap">
+      <div class="crawl-stat"><div class="crawl-stat-value">${summary.totalOpportunities}</div><div class="crawl-stat-label">Total Keywords</div></div>
+      <div class="crawl-stat"><div class="crawl-stat-value">${summary.strikingDistanceCount}</div><div class="crawl-stat-label">Striking Distance</div></div>
+      <div class="crawl-stat"><div class="crawl-stat-value">${summary.quickWinCount}</div><div class="crawl-stat-label">Quick Wins</div></div>
+      <div class="crawl-stat"><div class="crawl-stat-value">+${summary.totalEstimatedMonthlyTrafficGain}</div><div class="crawl-stat-label">Est. Monthly Traffic Gain</div></div>
+    </div>
+    ${opps.length > 0 ? `
+    <table class="kw-table">
+      <thead><tr><th>Keyword</th><th>Volume</th><th>Current</th><th>Target</th><th>Traffic Gain</th><th>Difficulty</th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>` : ''}
+    <p style="font-size:0.75rem;color:#a0aec0;margin-top:8px">Data source: ${summary.dataSource === 'dataforseo' ? 'DataForSEO API' : 'Heuristic estimates — connect DataForSEO API for precise data'}</p>
+  </div>`;
+}
+
+function contentGapSection(contentGaps, summary) {
+  if (!contentGaps || !summary || summary.totalGapsFound === 0) return '';
+
+  const gaps = summary.topGaps || [];
+  const rowsHtml = gaps.map(g => {
+    const diffClass = `difficulty-${g.difficulty || 'moderate'}`;
+    return `<tr>
+      <td>${escHtml(g.keyword)}</td>
+      <td>${g.searchVolume ? g.searchVolume.toLocaleString() : '—'}</td>
+      <td>${escHtml(g.competitorDomain || '—')}</td>
+      <td>#${g.competitorPosition || '—'}</td>
+      <td class="${diffClass}">${g.difficulty || '—'}</td>
+    </tr>`;
+  }).join('');
+
+  const categoriesHtml = Object.entries(summary.categories || {}).map(([cat, data]) =>
+    `<span style="display:inline-block;background:rgba(255,255,255,0.1);border-radius:6px;padding:4px 10px;margin:4px;font-size:0.78rem">${escHtml(cat)}: ${data.count} keyword(s)</span>`
+  ).join('');
+
+  return `<div class="gap-section">
+    <h2>🔍 Content Gap Analysis</h2>
+    <div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap">
+      <div class="crawl-stat"><div class="crawl-stat-value">${summary.totalGapsFound}</div><div class="crawl-stat-label">Gaps Found</div></div>
+      <div class="crawl-stat"><div class="crawl-stat-value">${summary.easyWins}</div><div class="crawl-stat-label">Easy Wins</div></div>
+      <div class="crawl-stat"><div class="crawl-stat-value">+${summary.totalEstimatedMonthlyTraffic}</div><div class="crawl-stat-label">Est. Monthly Traffic</div></div>
+    </div>
+    <div style="margin-bottom:16px">${categoriesHtml}</div>
+    ${gaps.length > 0 ? `
+    <table class="kw-table">
+      <thead><tr><th>Topic</th><th>Volume</th><th>Competitor</th><th>Their Position</th><th>Difficulty</th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>` : ''}
+    <p style="font-size:0.75rem;color:#a0aec0;margin-top:8px">Data source: ${summary.dataSource === 'dataforseo' ? 'DataForSEO API' : 'Heuristic estimates — connect DataForSEO API for precise data'}</p>
+  </div>`;
+}
+
+function roiSection(roi, roiSummary, roiRecommendations) {
+  if (!roi || !roiSummary) return '';
+
+  const recs = roiRecommendations || [];
+
+  const recsHtml = recs.map(r => {
+    const effortBadge = r.effort === 'low' ? '🟢 Quick' : r.effort === 'medium' ? '🟡 Medium' : '🔴 Significant';
+    return `<div class="roi-rec">
+      <h4>${escHtml(r.issue)}</h4>
+      <p>${escHtml(r.roiFrame || '')}</p>
+      <p style="margin-top:6px;font-size:0.75rem;color:#a0aec0">
+        ${effortBadge} effort · Category: ${escHtml(r.category)} ·
+        <span class="roi-value">+${r.estimatedMonthlyTraffic} visits/mo</span> ·
+        <span class="roi-value">~$${r.estimatedMonthlyValue}/mo</span>
+      </p>
+    </div>`;
+  }).join('');
+
+  return `<div class="roi-section">
+    <h2>💰 ROI Impact Analysis</h2>
+    <p style="font-size:0.85rem;color:#cbd5e0;margin-bottom:16px">${escHtml(roiSummary.executiveSummary || '')}</p>
+    <div class="roi-summary-grid">
+      <div class="roi-stat"><div class="roi-stat-value">${roiSummary.totalRecommendations}</div><div class="roi-stat-label">Recommendations</div></div>
+      <div class="roi-stat"><div class="roi-stat-value">+${(roiSummary.totalEstimatedMonthlyTrafficGain || 0).toLocaleString()}</div><div class="roi-stat-label">Monthly Traffic Gain</div></div>
+      <div class="roi-stat"><div class="roi-stat-value">$${(roiSummary.totalEstimatedMonthlyValue || 0).toLocaleString()}/mo</div><div class="roi-stat-label">Monthly Value</div></div>
+      <div class="roi-stat"><div class="roi-stat-value">$${(roiSummary.totalEstimatedAnnualValue || 0).toLocaleString()}/yr</div><div class="roi-stat-label">Annual Value</div></div>
+    </div>
+    ${roiSummary.quickWins > 0 ? `<p style="font-size:0.85rem;color:#68d391;margin-bottom:16px">✨ ${roiSummary.quickWins} quick win(s) available — low effort, immediate impact</p>` : ''}
+    ${recsHtml}
+  </div>`;
 }
 
 module.exports = { generateHtml };

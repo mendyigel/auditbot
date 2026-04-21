@@ -547,6 +547,44 @@ function matchFixDetail(issueText) {
   return null;
 }
 
+// ── Estimated traffic impact weights ────────────────────────────────────────
+// Maps issue patterns to estimated monthly traffic impact (relative scale 1-100).
+// These estimates are based on industry averages for how much each issue type
+// typically affects organic traffic when fixed.
+
+const TRAFFIC_IMPACT_ESTIMATES = {
+  'noindex directive': { trafficImpact: 100, rationale: 'Page is completely invisible to search engines — fixing restores all potential organic traffic.' },
+  'Missing viewport meta': { trafficImpact: 85, rationale: 'Google\'s mobile-first indexing penalizes non-mobile-friendly pages heavily.' },
+  'HTTP error status': { trafficImpact: 95, rationale: 'Error pages cannot rank and lose all organic traffic for their target queries.' },
+  'Title missing or too long': { trafficImpact: 70, rationale: 'Title tag is the strongest on-page ranking signal — fixing can improve position by 1-3 spots.' },
+  'Meta description missing': { trafficImpact: 40, rationale: 'Improves click-through rate by 5-10% but does not directly affect ranking position.' },
+  'No canonical URL': { trafficImpact: 55, rationale: 'Prevents duplicate content dilution — consolidates ranking signals to the preferred URL.' },
+  'exactly one H1': { trafficImpact: 25, rationale: 'Minor ranking signal but helps search engines understand page topic.' },
+  'Missing lang attribute': { trafficImpact: 20, rationale: 'Helps international SEO and correct language targeting.' },
+  'Missing og:title': { trafficImpact: 10, rationale: 'Social signals only — improves sharing appearance but minimal direct SEO impact.' },
+  'Missing og:image': { trafficImpact: 10, rationale: 'Social signals only — improves sharing engagement.' },
+  'No JSON-LD structured data': { trafficImpact: 35, rationale: 'Enables rich results which can boost CTR by 20-30%.' },
+  'Response not compressed': { trafficImpact: 45, rationale: 'Improves Core Web Vitals which is a direct Google ranking factor.' },
+  'Slow time-to-first-byte': { trafficImpact: 50, rationale: 'Slow servers hurt crawl efficiency and user experience signals.' },
+  'render-blocking <script>': { trafficImpact: 40, rationale: 'Affects LCP and page experience signals used in ranking.' },
+  'HTML payload too large': { trafficImpact: 25, rationale: 'Slows page load, especially on mobile — indirect ranking impact via Core Web Vitals.' },
+  'stylesheets may block rendering': { trafficImpact: 20, rationale: 'Minor performance impact on first paint timing.' },
+  'image(s) missing srcset or loading="lazy"': { trafficImpact: 30, rationale: 'Affects page speed on mobile, impacting Core Web Vitals.' },
+  'image(s) missing alt attribute': { trafficImpact: 30, rationale: 'Improves image search traffic and accessibility compliance.' },
+  'form input(s) missing label': { trafficImpact: 5, rationale: 'Accessibility compliance — minimal direct traffic impact.' },
+  'Heading levels are skipped': { trafficImpact: 10, rationale: 'Minor structural issue — helps content parsing.' },
+  'No skip-navigation link': { trafficImpact: 2, rationale: 'Accessibility best practice — no direct traffic impact.' },
+  'No <main> landmark': { trafficImpact: 5, rationale: 'Accessibility landmark — minimal traffic impact.' },
+  'button(s) have no visible or accessible name': { trafficImpact: 5, rationale: 'Accessibility compliance — no direct SEO traffic impact.' },
+};
+
+function estimateTrafficImpact(issueText) {
+  for (const [pattern, data] of Object.entries(TRAFFIC_IMPACT_ESTIMATES)) {
+    if (issueText.includes(pattern)) return data;
+  }
+  return { trafficImpact: 15, rationale: 'General improvement — moderate potential impact.' };
+}
+
 // ── Build prioritized fix list ───────────────────────────────────────────────
 
 function buildTopFixes(audit, maxFixes, platform) {
@@ -564,7 +602,11 @@ function buildTopFixes(audit, maxFixes, platform) {
     for (const issue of cat.data.issues) {
       const severity = classifySeverity(issue);
       const detail = matchFixDetail(issue);
-      const priorityScore = detail ? detail.impact * (4 - detail.effort) : severityToScore(severity);
+      const trafficData = estimateTrafficImpact(issue);
+
+      // Impact-based priority: traffic impact * ease-of-fix multiplier
+      const effortMultiplier = detail ? (4 - Math.min(detail.effort, 3)) : 2;
+      const priorityScore = trafficData.trafficImpact * effortMultiplier;
 
       // Build how-to-fix object from detail
       let howToFix = null;
@@ -589,12 +631,14 @@ function buildTopFixes(audit, maxFixes, platform) {
         effort: detail ? detail.effortLabel : 'Unknown',
         why: detail ? detail.why : issue,
         priorityScore,
+        trafficImpact: trafficData.trafficImpact,
+        trafficRationale: trafficData.rationale,
         howToFix,
       });
     }
   }
 
-  // Sort by priority score descending (highest impact + easiest first)
+  // Sort by priority score descending (highest traffic impact + easiest first)
   allIssues.sort((a, b) => b.priorityScore - a.priorityScore);
 
   return allIssues.slice(0, maxFixes);
@@ -642,12 +686,13 @@ function classifyAllIssues(issues) {
 
 // ── Main entry: enrich audit with interpretation ─────────────────────────────
 
-function enrichAudit(audit) {
+function enrichAudit(audit, extras) {
   if (audit.error) return audit;
 
   const platform = audit.detectedPlatform || 'html';
+  extras = extras || {};
 
-  return {
+  const result = {
     detectedPlatform: platform,
     scoreInterpretations: {
       overall: interpretScore('overall', audit.scores.overall),
@@ -661,15 +706,130 @@ function enrichAudit(audit) {
     perfIssuesClassified: classifyAllIssues(audit.performance.issues),
     a11yIssuesClassified: classifyAllIssues(audit.accessibility.issues),
   };
+
+  // Attach crawl summary if provided
+  if (extras.crawl) {
+    result.crawlSummary = interpretCrawl(extras.crawl);
+  }
+
+  // Attach competitor summary if provided
+  if (extras.competitor) {
+    result.competitorSummary = extras.competitor.comparison || null;
+  }
+
+  // Attach Tier 2 summaries if provided
+  if (extras.keywords) {
+    result.keywordSummary = {
+      totalOpportunities: extras.keywords.totalOpportunities || 0,
+      strikingDistanceCount: extras.keywords.strikingDistanceCount || 0,
+      quickWinCount: extras.keywords.quickWinCount || 0,
+      totalEstimatedMonthlyTrafficGain: extras.keywords.totalEstimatedMonthlyTrafficGain || 0,
+      topOpportunities: (extras.keywords.opportunities || []).slice(0, 5),
+      dataSource: extras.keywords.dataSource || 'heuristic',
+    };
+  }
+
+  if (extras.contentGaps) {
+    result.contentGapSummary = {
+      totalGapsFound: extras.contentGaps.totalGapsFound || 0,
+      easyWins: extras.contentGaps.easyWins || 0,
+      totalEstimatedMonthlyTraffic: extras.contentGaps.totalEstimatedMonthlyTraffic || 0,
+      categories: extras.contentGaps.categories || {},
+      topGaps: (extras.contentGaps.gaps || []).slice(0, 5),
+      dataSource: extras.contentGaps.dataSource || 'heuristic',
+    };
+  }
+
+  if (extras.roi) {
+    result.roiSummary = extras.roi.summary || null;
+    result.roiRecommendations = (extras.roi.recommendations || []).slice(0, 10);
+  }
+
+  return result;
+}
+
+function interpretCrawl(crawl) {
+  const issues = [];
+
+  if (crawl.orphanPages && crawl.orphanPages.length > 0) {
+    issues.push({
+      severity: 'high',
+      title: `${crawl.orphanPages.length} orphan page(s) found`,
+      description: 'These pages have no internal links pointing to them, making them hard for search engines to discover.',
+      pages: crawl.orphanPages.map(p => p.url),
+      trafficImpact: 60,
+    });
+  }
+
+  if (crawl.duplicateTitles && crawl.duplicateTitles.length > 0) {
+    issues.push({
+      severity: 'high',
+      title: `${crawl.duplicateTitles.length} duplicate title(s) found`,
+      description: 'Duplicate title tags confuse search engines about which page to rank for a query.',
+      items: crawl.duplicateTitles,
+      trafficImpact: 50,
+    });
+  }
+
+  if (crawl.duplicateDescriptions && crawl.duplicateDescriptions.length > 0) {
+    issues.push({
+      severity: 'medium',
+      title: `${crawl.duplicateDescriptions.length} duplicate meta description(s)`,
+      description: 'Duplicate descriptions reduce click-through rates from search results.',
+      items: crawl.duplicateDescriptions,
+      trafficImpact: 25,
+    });
+  }
+
+  if (crawl.indexationIssues && crawl.indexationIssues.length > 0) {
+    issues.push({
+      severity: 'critical',
+      title: `${crawl.indexationIssues.length} page(s) with indexation problems`,
+      description: 'These pages may not appear in search results due to noindex, missing canonical, or HTTP errors.',
+      items: crawl.indexationIssues,
+      trafficImpact: 80,
+    });
+  }
+
+  if (crawl.thinContentPages && crawl.thinContentPages.length > 0) {
+    issues.push({
+      severity: 'medium',
+      title: `${crawl.thinContentPages.length} thin content page(s) (<300 words)`,
+      description: 'Pages with very little content are less likely to rank well for competitive queries.',
+      items: crawl.thinContentPages,
+      trafficImpact: 35,
+    });
+  }
+
+  if (crawl.missingTitles && crawl.missingTitles.length > 0) {
+    issues.push({
+      severity: 'high',
+      title: `${crawl.missingTitles.length} page(s) missing title tags`,
+      description: 'Pages without title tags lose their most important ranking signal.',
+      pages: crawl.missingTitles,
+      trafficImpact: 70,
+    });
+  }
+
+  // Sort by traffic impact
+  issues.sort((a, b) => b.trafficImpact - a.trafficImpact);
+
+  return {
+    pagesCrawled: crawl.pagesCrawled,
+    totalIssues: issues.length,
+    issues,
+  };
 }
 
 module.exports = {
   enrichAudit,
   interpretScore,
   interpretMetrics,
+  interpretCrawl,
   buildTopFixes,
   classifySeverity,
   classifyAllIssues,
+  estimateTrafficImpact,
   SEVERITY,
   BENCHMARKS,
 };
