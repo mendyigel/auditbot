@@ -23,7 +23,7 @@ const {
   TRIAL_PDF_LIMIT,
   PLANS,
 } = require('./billing');
-const { requireActiveSubscription, requirePdfAllowed } = require('./auth');
+const { requireActiveSubscription, requirePdfAllowed, allowFreeTier } = require('./auth');
 const db = require('./db');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
@@ -1970,7 +1970,7 @@ app.get('/audit', requireActiveSubscription, async (req, res) => {
  * structural analysis including orphan pages, duplicate content, and indexation gaps.
  * Body: { url: string, maxPages?: number }
  */
-app.post('/audit/site', requireActiveSubscription, async (req, res) => {
+app.post('/audit/site', allowFreeTier, async (req, res) => {
   const { url, maxPages } = req.body || {};
 
   if (!url || typeof url !== 'string') {
@@ -2009,7 +2009,7 @@ app.post('/audit/site', requireActiveSubscription, async (req, res) => {
  * Competitor benchmarking. Compares the target domain against 3-5 competitors.
  * Body: { url: string, competitors: string[] }
  */
-app.post('/audit/competitors', requireActiveSubscription, async (req, res) => {
+app.post('/audit/competitors', allowFreeTier, async (req, res) => {
   const { url, competitors } = req.body || {};
 
   if (!url || typeof url !== 'string') {
@@ -2146,7 +2146,7 @@ app.post('/audit/content-gaps', requireActiveSubscription, requireProPlan, async
  * Pro plan users also get: keyword mapping, content gap analysis, ROI framing.
  * Body: { url: string, competitors?: string[], maxPages?: number, format?: 'json'|'html', industry?: string }
  */
-app.post('/audit/full', requireActiveSubscription, async (req, res) => {
+app.post('/audit/full', allowFreeTier, async (req, res) => {
   const { url, competitors = [], maxPages, format = 'json', industry } = req.body || {};
 
   if (!url || typeof url !== 'string') {

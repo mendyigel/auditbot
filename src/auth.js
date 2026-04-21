@@ -86,6 +86,94 @@ function upgradePage({ title, heading, detail, upgradeUrl, ctaText }) {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TRIAL_DAYS = 14;
 
+// ── Free-tier rate limiter for Tier 1 endpoints ────────────────────────────────
+const freeTierLimiter = { counts: new Map() };
+setInterval(() => {
+  const cutoff = Date.now() - 3600000;
+  for (const [ip, entry] of freeTierLimiter.counts) {
+    if (entry.firstAt < cutoff) freeTierLimiter.counts.delete(ip);
+  }
+}, 600000);
+
+const FREE_TIER_HOURLY_LIMIT = 5;
+
+/**
+ * Express middleware that allows free (unauthenticated) access to Tier 1 endpoints.
+ * - If the user has a valid API key + active subscription, it behaves like
+ *   requireActiveSubscription (attaches req.subscription, enforces limits).
+ * - If the user has no API key or no active subscription, the request is still
+ *   allowed but rate-limited by IP (5 requests/hour).
+ * This enables Tier 1 features (site crawl, competitor benchmarking, full audit)
+ * to be used without any paid plan.
+ */
+function allowFreeTier(req, res, next) {
+  // Dev / test: skip all enforcement
+  if (!process.env.STRIPE_SECRET_KEY) {
+    return next();
+  }
+
+  const { apiKey } = resolveApiKey(req);
+
+  // If user has a valid API key, try to attach subscription and enforce limits
+  if (apiKey) {
+    const sub = lookupSubscription(apiKey);
+    if (sub && isActive(apiKey)) {
+      // Trial limit enforcement
+      if (sub.status === 'trialing') {
+        const appUrl = process.env.APP_URL || '';
+        const ageMs = Date.now() - sub.createdAt;
+        if (ageMs > TRIAL_DAYS * DAY_MS) {
+          // Trial expired — fall through to free-tier rate limiting
+        } else if (sub.auditCount >= TRIAL_AUDIT_LIMIT) {
+          // Trial audits exhausted — fall through to free-tier rate limiting
+        } else {
+          req.subscription = sub;
+          return next();
+        }
+      } else {
+        // Starter tier monthly limit
+        if (sub.status === 'active' && sub.planTier === 'starter') {
+          const plan = PLANS.starter;
+          const monthlyCount = db.getMonthlyAuditCount(apiKey);
+          if (monthlyCount >= plan.monthlyAudits) {
+            // Monthly limit reached — fall through to free-tier rate limiting
+          } else {
+            req.subscription = sub;
+            return next();
+          }
+        } else {
+          req.subscription = sub;
+          return next();
+        }
+      }
+    }
+    // Invalid/inactive subscription — fall through to free-tier rate limiting
+  }
+
+  // Free-tier path: rate-limit by IP
+  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const entry = freeTierLimiter.counts.get(ip) || { count: 0, firstAt: now };
+  if (now - entry.firstAt > 3600000) {
+    entry.count = 0;
+    entry.firstAt = now;
+  }
+  if (entry.count >= FREE_TIER_HOURLY_LIMIT) {
+    return res.status(429).json({
+      error: 'Free tier rate limit reached',
+      detail: `Free usage is limited to ${FREE_TIER_HOURLY_LIMIT} requests per hour. Sign up for a plan for higher limits.`,
+      trialUrl: (process.env.APP_URL || '') + '/billing/trial',
+      subscribeUrl: (process.env.APP_URL || '') + '/billing/checkout',
+    });
+  }
+  entry.count++;
+  freeTierLimiter.counts.set(ip, entry);
+
+  // No subscription attached — downstream handlers should handle null req.subscription
+  req.subscription = null;
+  next();
+}
+
 /**
  * Express middleware that requires a valid API key with an active Stripe subscription.
  * For trialing subscriptions, enforces:
@@ -218,4 +306,4 @@ function requirePdfAllowed(req, res, next) {
   next();
 }
 
-module.exports = { requireActiveSubscription, requirePdfAllowed, resolveApiKey };
+module.exports = { requireActiveSubscription, requirePdfAllowed, allowFreeTier, resolveApiKey };
