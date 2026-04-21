@@ -37,6 +37,7 @@ const emailService = require('./email');
 const { mapKeywordOpportunities } = require('./keywords');
 const { analyzeContentGaps } = require('./content-gap');
 const { frameRoi } = require('./roi');
+const { startScheduler, MAX_SITES_PER_USER } = require('./monitor');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -999,6 +1000,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="tab-nav">
   <button class="tab-btn active" data-tab="audit">Run Audit</button>
   <button class="tab-btn" data-tab="reports">My Reports</button>
+  <button class="tab-btn" data-tab="monitoring">Monitoring</button>
   <button class="tab-btn" data-tab="account">Account</button>
 </div>
 <div class="dashboard">
@@ -1038,6 +1040,50 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     </div>
   </div>
 
+  <!-- Tab: Monitoring -->
+  <div class="tab-content" id="tab-monitoring">
+    ${hasActiveSub ? `
+    <div class="card">
+      <h2>Site Monitoring</h2>
+      <p style="color:var(--muted);font-size:0.9rem;margin-bottom:16px">Track your sites over time. Get alerts when scores drop, issues appear, or competitors overtake you.</p>
+      <div id="monitor-add" style="margin-bottom:20px">
+        <div style="display:flex;gap:10px;margin-bottom:10px">
+          <input type="url" id="monitor-url" placeholder="https://example.com" style="flex:1;padding:12px 16px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:1rem;outline:none" />
+          <select id="monitor-freq" style="padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.9rem">
+            <option value="daily">Daily</option>
+            <option value="weekly" selected>Weekly</option>
+            <option value="biweekly">Biweekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+          <button id="monitor-add-btn" style="padding:12px 24px;background:var(--brand);color:#fff;border:none;border-radius:8px;font-size:1rem;font-weight:700;cursor:pointer;white-space:nowrap">Add Site</button>
+        </div>
+        <div id="monitor-comp" style="margin-bottom:8px">
+          <input type="url" id="monitor-comp1" placeholder="Competitor URL 1 (optional)" style="width:100%;padding:8px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.85rem;margin-bottom:4px" />
+          <input type="url" id="monitor-comp2" placeholder="Competitor URL 2 (optional)" style="width:100%;padding:8px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.85rem;margin-bottom:4px" />
+          <input type="url" id="monitor-comp3" placeholder="Competitor URL 3 (optional)" style="width:100%;padding:8px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.85rem" />
+        </div>
+        <div id="monitor-error" style="display:none;color:#f87171;font-size:0.9rem;font-weight:600;margin-top:8px"></div>
+      </div>
+      <div id="monitored-sites-list"><p style="color:var(--muted);font-size:0.9rem">Loading...</p></div>
+    </div>
+    <div class="card" id="monitoring-detail-card" style="display:none">
+      <h2 id="detail-site-title">Site Details</h2>
+      <div id="detail-trends" style="margin-bottom:16px"></div>
+      <div id="detail-snapshots"></div>
+      <div style="margin-top:16px">
+        <button id="generate-roadmap-btn" style="padding:12px 24px;background:#10b981;color:#fff;border:none;border-radius:8px;font-size:1rem;font-weight:700;cursor:pointer">Generate AI Roadmap</button>
+      </div>
+      <div id="roadmap-display" style="display:none;margin-top:20px"></div>
+    </div>
+    ` : `
+    <div class="no-sub-cta">
+      <h2>Monitor your sites 24/7</h2>
+      <p>Track SEO changes, get alerts for score drops, and receive AI-powered improvement roadmaps. Available on the Pro plan.</p>
+      <a href="/#pricing" class="cta-btn">Start free trial</a>
+    </div>
+    `}
+  </div>
+
   <!-- Tab: Account -->
   <div class="tab-content" id="tab-account">
     <div class="card">
@@ -1063,6 +1109,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
       if(tab.dataset.tab === 'reports' && !window._reportsLoaded){
         window._reportsLoaded = true;
         loadReports();
+      }
+      if(tab.dataset.tab === 'monitoring' && !monitorLoaded && typeof loadMonitoredSites === 'function'){
+        monitorLoaded = true;
+        loadMonitoredSites();
       }
     });
   });
@@ -1133,6 +1183,170 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     })
     .catch(function(){btn.disabled=false;btn.textContent="Audit";errEl.textContent="Something went wrong. Please try again.";errEl.style.display="block";});
   });
+  ` : ''}
+
+  // --- Monitoring Tab Logic ---
+  ${hasActiveSub ? `
+  var monitorLoaded = false;
+  function loadMonitoredSites() {
+    var container = document.getElementById('monitored-sites-list');
+    fetch('/monitor/sites').then(function(r){ return r.json(); }).then(function(sites) {
+      if (!Array.isArray(sites) || sites.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No monitored sites yet.</p><p>Add a URL above to start tracking.</p></div>';
+        return;
+      }
+      var html = '<table class="reports-table"><thead><tr><th>Site</th><th>Frequency</th><th>Score</th><th>Status</th><th></th></tr></thead><tbody>';
+      sites.forEach(function(s) {
+        var shortUrl = s.url.replace(/^https?:\\\\/\\\\//, '').slice(0, 35);
+        var score = s.latestSnapshot ? s.latestSnapshot.overallScore : '—';
+        var scoreClass = s.latestSnapshot ? (s.latestSnapshot.overallScore >= 80 ? 'score-good' : s.latestSnapshot.overallScore >= 50 ? 'score-mid' : 'score-bad') : '';
+        var status = s.enabled ? '<span style="color:#4ade80">Active</span>' : '<span style="color:var(--muted)">Paused</span>';
+        html += '<tr><td title="' + s.url.replace(/"/g,'&quot;') + '">' + shortUrl + '</td>';
+        html += '<td style="color:var(--muted);text-transform:capitalize">' + s.frequency + '</td>';
+        html += '<td><span class="' + scoreClass + '" style="font-weight:700">' + score + '</span></td>';
+        html += '<td>' + status + '</td>';
+        html += '<td style="white-space:nowrap"><a href="#" onclick="viewSiteDetail(\\'' + s.id + '\\');return false">Details</a> &nbsp; <a href="#" style="color:#f87171" onclick="deleteSite(\\'' + s.id + '\\');return false">Remove</a></td></tr>';
+      });
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    }).catch(function() {
+      container.innerHTML = '<p style="color:#f87171">Failed to load monitored sites.</p>';
+    });
+  }
+
+  // Add site
+  var addBtn = document.getElementById('monitor-add-btn');
+  if (addBtn) {
+    addBtn.addEventListener('click', function() {
+      var url = document.getElementById('monitor-url').value.trim();
+      var freq = document.getElementById('monitor-freq').value;
+      var errEl = document.getElementById('monitor-error');
+      if (!url) { errEl.textContent = 'Please enter a URL'; errEl.style.display = 'block'; return; }
+      var competitors = [1,2,3].map(function(n) { return document.getElementById('monitor-comp' + n).value.trim(); }).filter(Boolean);
+      addBtn.disabled = true; addBtn.textContent = 'Adding...';
+      errEl.style.display = 'none';
+      fetch('/monitor/sites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url, frequency: freq, competitorUrls: competitors })
+      }).then(function(r) { return r.json().then(function(d) { return r.ok ? d : Promise.reject(d); }); })
+        .then(function() {
+          document.getElementById('monitor-url').value = '';
+          [1,2,3].forEach(function(n) { document.getElementById('monitor-comp' + n).value = ''; });
+          addBtn.disabled = false; addBtn.textContent = 'Add Site';
+          loadMonitoredSites();
+        })
+        .catch(function(err) {
+          errEl.textContent = (err && err.error) || 'Failed to add site';
+          errEl.style.display = 'block';
+          addBtn.disabled = false; addBtn.textContent = 'Add Site';
+        });
+    });
+  }
+
+  window.deleteSite = function(id) {
+    if (!confirm('Remove this site from monitoring?')) return;
+    fetch('/monitor/sites/' + id, { method: 'DELETE' }).then(function() { loadMonitoredSites(); });
+  };
+
+  window.viewSiteDetail = function(id) {
+    var card = document.getElementById('monitoring-detail-card');
+    card.style.display = 'block';
+    document.getElementById('detail-trends').innerHTML = '<p style="color:var(--muted)">Loading trends...</p>';
+    document.getElementById('detail-snapshots').innerHTML = '';
+    document.getElementById('roadmap-display').style.display = 'none';
+
+    // Load trends
+    fetch('/monitor/sites/' + id + '/trends').then(function(r){ return r.json(); }).then(function(data) {
+      document.getElementById('detail-site-title').textContent = data.url || 'Site Details';
+      if (!data.trends || data.trends.length === 0) {
+        document.getElementById('detail-trends').innerHTML = '<p style="color:var(--muted)">No trend data yet. Scores will appear after the first monitoring audit runs.</p>';
+        return;
+      }
+      // Render simple sparkline-style trend display
+      var html = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">';
+      var latest = data.trends[data.trends.length - 1];
+      [{l:'Overall',k:'overallScore'},{l:'SEO',k:'seoScore'},{l:'Performance',k:'performanceScore'},{l:'Accessibility',k:'accessibilityScore'}].forEach(function(cat) {
+        var val = latest[cat.k];
+        var cls = val >= 80 ? 'score-good' : val >= 50 ? 'score-mid' : 'score-bad';
+        html += '<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">';
+        html += '<div class="' + cls + '" style="font-size:1.5rem;font-weight:800">' + val + '</div>';
+        html += '<div style="font-size:0.7rem;color:var(--muted);text-transform:uppercase">' + cat.l + '</div>';
+        // Mini trend line
+        if (data.trends.length > 1) {
+          var vals = data.trends.map(function(t){ return t[cat.k]; });
+          var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
+          var range = max - min || 1;
+          var points = vals.map(function(v, i) { return (i * 60 / (vals.length - 1)) + ',' + (30 - ((v - min) / range) * 28); }).join(' ');
+          html += '<svg viewBox="0 0 60 32" style="width:100%;height:20px;margin-top:4px"><polyline points="' + points + '" fill="none" stroke="var(--brand)" stroke-width="1.5"/></svg>';
+        }
+        html += '</div>';
+      });
+      html += '</div>';
+      document.getElementById('detail-trends').innerHTML = html;
+    }).catch(function() {
+      document.getElementById('detail-trends').innerHTML = '<p style="color:#f87171">Failed to load trends.</p>';
+    });
+
+    // Load history
+    fetch('/monitor/sites/' + id + '/history?limit=10').then(function(r){ return r.json(); }).then(function(snapshots) {
+      if (!Array.isArray(snapshots) || snapshots.length === 0) {
+        document.getElementById('detail-snapshots').innerHTML = '<p style="color:var(--muted)">No audit history yet.</p>';
+        return;
+      }
+      var html = '<h3 style="font-size:0.9rem;font-weight:700;margin-bottom:8px">Audit History</h3>';
+      html += '<table class="reports-table"><thead><tr><th>Date</th><th>Overall</th><th>SEO</th><th>Perf</th><th>A11y</th></tr></thead><tbody>';
+      snapshots.forEach(function(snap) {
+        var d = new Date(snap.createdAt);
+        html += '<tr><td style="color:var(--muted);white-space:nowrap">' + d.toLocaleDateString() + '</td>';
+        html += '<td style="font-weight:700">' + snap.overallScore + '</td>';
+        html += '<td>' + snap.seoScore + '</td><td>' + snap.performanceScore + '</td><td>' + snap.accessibilityScore + '</td></tr>';
+      });
+      html += '</tbody></table>';
+      document.getElementById('detail-snapshots').innerHTML = html;
+    }).catch(function() {});
+
+    // Wire up roadmap generation
+    var roadmapBtn = document.getElementById('generate-roadmap-btn');
+    roadmapBtn.onclick = function() {
+      roadmapBtn.disabled = true; roadmapBtn.textContent = 'Generating...';
+      fetch('/roadmap/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ siteId: id })
+      }).then(function(r){ return r.json().then(function(d){ return r.ok ? d : Promise.reject(d); }); })
+        .then(function(roadmap) {
+          roadmapBtn.disabled = false; roadmapBtn.textContent = 'Generate AI Roadmap';
+          var rm = roadmap.roadmapJson || roadmap;
+          var html = '<h3 style="font-size:1rem;font-weight:700;margin-bottom:8px">AI SEO Roadmap</h3>';
+          if (rm.summary) html += '<p style="color:var(--muted);font-size:0.9rem;margin-bottom:16px">' + rm.summary + '</p>';
+          if (rm.phases) {
+            rm.phases.forEach(function(phase) {
+              html += '<div style="margin-bottom:16px"><h4 style="font-size:0.9rem;font-weight:700;color:var(--brand);margin-bottom:8px">' + phase.name + ' (' + phase.timeframe + ')</h4>';
+              if (phase.actions) {
+                phase.actions.forEach(function(action) {
+                  html += '<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px">';
+                  html += '<div style="font-weight:600;margin-bottom:4px">' + action.title + '</div>';
+                  if (action.reasoning) html += '<div style="font-size:0.8rem;color:var(--muted);margin-bottom:6px">' + action.reasoning + '</div>';
+                  html += '<div style="display:flex;gap:12px;font-size:0.75rem;color:var(--muted)">';
+                  if (action.effort_hours) html += '<span>Effort: ' + action.effort_hours + 'h</span>';
+                  if (action.impact) html += '<span>Impact: ' + action.impact + '</span>';
+                  if (action.category) html += '<span style="text-transform:capitalize">' + action.category + '</span>';
+                  html += '</div></div>';
+                });
+              }
+              html += '</div>';
+            });
+          }
+          document.getElementById('roadmap-display').innerHTML = html;
+          document.getElementById('roadmap-display').style.display = 'block';
+        })
+        .catch(function(err) {
+          roadmapBtn.disabled = false; roadmapBtn.textContent = 'Generate AI Roadmap';
+          alert((err && err.error) || 'Roadmap generation failed');
+        });
+    };
+  };
   ` : ''}
 
   // Handle hash-based tab routing
@@ -2017,12 +2231,233 @@ app.post('/audit/full', requireActiveSubscription, async (req, res) => {
   }
 });
 
+// ── Monitoring API (Pro plan required) ────────────────────────────────────────
+
+/** Resolve user from session cookie — returns user row or null. */
+function resolveSessionUser(req) {
+  const sessionToken = req.cookies && req.cookies.session;
+  if (!sessionToken) return null;
+  return db.getUserBySessionToken(sessionToken) || null;
+}
+
+/** POST /monitor/sites — Create a monitored site */
+app.post('/monitor/sites', requireActiveSubscription, requireProPlan, (req, res) => {
+  const user = resolveSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in required' });
+
+  const { url, frequency, competitorUrls, notifyOn } = req.body || {};
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'Missing required field: url' });
+  }
+
+  // Enforce per-user limit
+  const count = db.countUserMonitoredSites(user.id);
+  if (count >= MAX_SITES_PER_USER) {
+    return res.status(400).json({
+      error: `Maximum ${MAX_SITES_PER_USER} monitored sites allowed`,
+      current: count,
+    });
+  }
+
+  const validFreqs = ['daily', 'weekly', 'biweekly', 'monthly'];
+  const freq = validFreqs.includes(frequency) ? frequency : 'weekly';
+  const competitors = Array.isArray(competitorUrls) ? competitorUrls.slice(0, 3) : [];
+
+  const id = uuidv4();
+  db.createMonitoredSite({
+    id,
+    userId: user.id,
+    url: url.trim(),
+    frequency: freq,
+    competitorUrls: competitors,
+    notifyOn: notifyOn || undefined,
+  });
+
+  const site = db.getMonitoredSite(id);
+  res.status(201).json(site);
+});
+
+/** GET /monitor/sites — List user's monitored sites */
+app.get('/monitor/sites', requireActiveSubscription, requireProPlan, (req, res) => {
+  const user = resolveSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in required' });
+
+  const sites = db.getMonitoredSitesByUser(user.id);
+  // Attach latest snapshot summary to each site
+  const enriched = sites.map(site => {
+    const latest = db.getLatestSnapshot(site.id);
+    return {
+      ...site,
+      latestSnapshot: latest ? {
+        overallScore: latest.overallScore,
+        seoScore: latest.seoScore,
+        performanceScore: latest.performanceScore,
+        accessibilityScore: latest.accessibilityScore,
+        createdAt: latest.createdAt,
+      } : null,
+    };
+  });
+  res.json(enriched);
+});
+
+/** PATCH /monitor/sites/:id — Update a monitored site */
+app.patch('/monitor/sites/:id', requireActiveSubscription, requireProPlan, (req, res) => {
+  const user = resolveSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in required' });
+
+  const site = db.getMonitoredSite(req.params.id);
+  if (!site || site.userId !== user.id) {
+    return res.status(404).json({ error: 'Monitored site not found' });
+  }
+
+  const { frequency, competitorUrls, notifyOn, enabled } = req.body || {};
+  const updated = db.updateMonitoredSite(req.params.id, { frequency, competitorUrls, notifyOn, enabled });
+  res.json(updated);
+});
+
+/** DELETE /monitor/sites/:id — Remove a monitored site */
+app.delete('/monitor/sites/:id', requireActiveSubscription, requireProPlan, (req, res) => {
+  const user = resolveSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in required' });
+
+  const site = db.getMonitoredSite(req.params.id);
+  if (!site || site.userId !== user.id) {
+    return res.status(404).json({ error: 'Monitored site not found' });
+  }
+
+  db.deleteMonitoredSite(req.params.id);
+  res.json({ deleted: true });
+});
+
+/** GET /monitor/sites/:id/history — Get audit snapshots for a site */
+app.get('/monitor/sites/:id/history', requireActiveSubscription, requireProPlan, (req, res) => {
+  const user = resolveSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in required' });
+
+  const site = db.getMonitoredSite(req.params.id);
+  if (!site || site.userId !== user.id) {
+    return res.status(404).json({ error: 'Monitored site not found' });
+  }
+
+  const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+  const snapshots = db.getSnapshotsBySite(req.params.id, limit);
+  res.json(snapshots);
+});
+
+/** GET /monitor/sites/:id/trends — Get score trends (chart-ready) */
+app.get('/monitor/sites/:id/trends', requireActiveSubscription, requireProPlan, (req, res) => {
+  const user = resolveSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in required' });
+
+  const site = db.getMonitoredSite(req.params.id);
+  if (!site || site.userId !== user.id) {
+    return res.status(404).json({ error: 'Monitored site not found' });
+  }
+
+  const trends = db.getTrendsBySite(req.params.id);
+  res.json({ siteId: req.params.id, url: site.url, trends });
+});
+
+// ── Roadmap API (Pro plan required) ──────────────────────────────────────────
+
+/** POST /roadmap/generate — Generate AI roadmap for a site */
+app.post('/roadmap/generate', requireActiveSubscription, requireProPlan, async (req, res) => {
+  const user = resolveSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in required' });
+
+  const { siteId, snapshotId, vertical } = req.body || {};
+  if (!siteId) return res.status(400).json({ error: 'Missing required field: siteId' });
+
+  const site = db.getMonitoredSite(siteId);
+  if (!site || site.userId !== user.id) {
+    return res.status(404).json({ error: 'Monitored site not found' });
+  }
+
+  // Rate limit: 1 roadmap per site per day
+  const existingRoadmap = db.getLatestRoadmapBySite(siteId);
+  if (existingRoadmap && (Date.now() - existingRoadmap.createdAt) < 24 * 60 * 60 * 1000) {
+    return res.json(existingRoadmap);
+  }
+
+  // Get snapshot data
+  const snapshot = snapshotId
+    ? db.getSnapshot(snapshotId)
+    : db.getLatestSnapshot(siteId);
+
+  if (!snapshot) {
+    return res.status(400).json({ error: 'No audit snapshot available. Run a monitoring audit first.' });
+  }
+
+  // Get trend data
+  const trends = db.getTrendsBySite(siteId);
+
+  try {
+    const { generateRoadmap } = require('./roadmap');
+    const roadmap = await generateRoadmap({
+      url: site.url,
+      snapshot,
+      trends: trends.slice(-5),
+      competitorScores: snapshot.competitorScores,
+      vertical: vertical || null,
+    });
+
+    const roadmapId = uuidv4();
+    db.saveRoadmap({
+      id: roadmapId,
+      userId: user.id,
+      monitoredSiteId: siteId,
+      snapshotId: snapshot.id,
+      roadmapJson: roadmap,
+      roadmapHtml: '', // TODO: render HTML in Phase 4
+      vertical: roadmap.vertical || vertical,
+    });
+
+    res.status(201).json(db.getRoadmap(roadmapId));
+  } catch (err) {
+    console.error('[roadmap] Generation error:', err.message);
+    res.status(500).json({ error: 'Roadmap generation failed', detail: err.message });
+  }
+});
+
+/** GET /roadmap/:id — Get a generated roadmap */
+app.get('/roadmap/:id', requireActiveSubscription, requireProPlan, (req, res) => {
+  const user = resolveSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in required' });
+
+  const roadmap = db.getRoadmap(req.params.id);
+  if (!roadmap || roadmap.userId !== user.id) {
+    return res.status(404).json({ error: 'Roadmap not found' });
+  }
+  res.json(roadmap);
+});
+
+/** GET /roadmap/latest/:siteId — Get most recent roadmap for a monitored site */
+app.get('/roadmap/latest/:siteId', requireActiveSubscription, requireProPlan, (req, res) => {
+  const user = resolveSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in required' });
+
+  const site = db.getMonitoredSite(req.params.siteId);
+  if (!site || site.userId !== user.id) {
+    return res.status(404).json({ error: 'Monitored site not found' });
+  }
+
+  const roadmap = db.getLatestRoadmapBySite(req.params.siteId);
+  if (!roadmap) {
+    return res.status(404).json({ error: 'No roadmap generated yet' });
+  }
+  res.json(roadmap);
+});
+
 // ── Sentry error handler (must be after all routes, before other error handlers)
 if (process.env.SENTRY_DSN) {
   app.use(Sentry.expressErrorHandler());
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
+
+// Start monitoring scheduler
+startScheduler();
+
 app.listen(PORT, () => {
   console.log(`OrbioLabs running on http://localhost:${PORT}`);
   console.log(`Try: curl -X POST http://localhost:${PORT}/audit -H 'Content-Type: application/json' -d '{"url":"https://example.com"}'`);

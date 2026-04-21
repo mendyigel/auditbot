@@ -337,6 +337,33 @@ async function sendTest(to) {
   });
 }
 
+// ── Monitoring Alert Emails ──────────────────────────────────────────────────
+
+async function sendMonitoringAlert({ type, siteUrl, category, oldScore, newScore, competitorUrl, userId }) {
+  // Look up user email from userId
+  const db = require('./db');
+  const user = userId ? (() => {
+    // Find user and their subscription email
+    try {
+      const userRow = db.getUserBySessionToken(null); // fallback
+      return null;
+    } catch (_) { return null; }
+  })() : null;
+
+  // For now, log the alert — email delivery requires user email lookup
+  // which will be wired up when the dashboard provides the email context
+  const subjects = {
+    score_drop: `⚠️ ${siteUrl}: ${category} score dropped ${oldScore} → ${newScore}`,
+    score_improvement: `✅ ${siteUrl}: Overall score improved ${oldScore} → ${newScore}!`,
+    competitor_overtake: `📊 Competitor ${competitorUrl} now outranks you in ${category}`,
+    new_critical_issue: `🔴 New critical issue on ${siteUrl}`,
+    weekly_digest: `📈 Weekly SEO report for ${siteUrl}`,
+  };
+
+  console.log(`[email] Monitoring alert (${type}): ${subjects[type] || type}`);
+  // TODO: wire up actual email delivery once user email resolution is in place
+}
+
 module.exports = {
   sendWelcome,
   sendTrialDay3,
@@ -348,4 +375,5 @@ module.exports = {
   sendPasswordReset,
   getStatus,
   sendTest,
+  sendMonitoringAlert,
 };

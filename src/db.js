@@ -80,6 +80,53 @@ try { db.exec(`CREATE INDEX IF NOT EXISTS idx_reports_user ON reports(user_id)`)
 try { db.exec(`ALTER TABLE users ADD COLUMN reset_token TEXT`); } catch (_) {}
 try { db.exec(`ALTER TABLE users ADD COLUMN reset_token_expires INTEGER`); } catch (_) {}
 
+// ── Tier 3: Monitoring + Roadmap tables ──────────────────────────────────────
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS monitored_sites (
+    id              TEXT PRIMARY KEY,
+    user_id         TEXT NOT NULL,
+    url             TEXT NOT NULL,
+    frequency       TEXT NOT NULL DEFAULT 'weekly',
+    next_run_at     INTEGER NOT NULL,
+    last_run_at     INTEGER,
+    competitor_urls TEXT NOT NULL DEFAULT '[]',
+    notify_on       TEXT NOT NULL DEFAULT '{"score_drop":true,"new_issues":true,"competitor_change":true}',
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    created_at      INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS audit_snapshots (
+    id                TEXT PRIMARY KEY,
+    monitored_site_id TEXT NOT NULL,
+    report_id         TEXT,
+    seo_score         INTEGER NOT NULL DEFAULT 0,
+    performance_score INTEGER NOT NULL DEFAULT 0,
+    accessibility_score INTEGER NOT NULL DEFAULT 0,
+    overall_score     INTEGER NOT NULL DEFAULT 0,
+    issues_json       TEXT NOT NULL DEFAULT '[]',
+    competitor_scores TEXT NOT NULL DEFAULT '{}',
+    created_at        INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS roadmaps (
+    id                TEXT PRIMARY KEY,
+    user_id           TEXT NOT NULL,
+    monitored_site_id TEXT,
+    snapshot_id       TEXT,
+    roadmap_json      TEXT NOT NULL DEFAULT '{}',
+    roadmap_html      TEXT NOT NULL DEFAULT '',
+    vertical          TEXT,
+    created_at        INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_snapshots_site_created ON audit_snapshots(monitored_site_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_monitored_user ON monitored_sites(user_id, enabled);
+  CREATE INDEX IF NOT EXISTS idx_monitored_next_run ON monitored_sites(next_run_at, enabled);
+  CREATE INDEX IF NOT EXISTS idx_roadmaps_user ON roadmaps(user_id);
+  CREATE INDEX IF NOT EXISTS idx_roadmaps_site ON roadmaps(monitored_site_id);
+`);
+
 // ── Report helpers ─────────────────────────────────────────────────────────────
 
 const stmts = {
@@ -352,6 +399,234 @@ function updatePassword(userId, passwordHash) {
   stmts.updatePassword.run(passwordHash, userId);
 }
 
+// ── Monitored Sites API ──────────────────────────────────────────────────────
+
+const monitorStmts = {
+  insertSite: db.prepare(
+    `INSERT INTO monitored_sites (id, user_id, url, frequency, next_run_at, competitor_urls, notify_on, enabled, created_at)
+     VALUES (@id, @user_id, @url, @frequency, @next_run_at, @competitor_urls, @notify_on, @enabled, @created_at)`
+  ),
+  getSite: db.prepare(`SELECT * FROM monitored_sites WHERE id = ?`),
+  getSitesByUser: db.prepare(`SELECT * FROM monitored_sites WHERE user_id = ? ORDER BY created_at DESC`),
+  getEnabledSitesByUser: db.prepare(`SELECT * FROM monitored_sites WHERE user_id = ? AND enabled = 1 ORDER BY created_at DESC`),
+  updateSite: db.prepare(
+    `UPDATE monitored_sites SET frequency = @frequency, competitor_urls = @competitor_urls,
+     notify_on = @notify_on, enabled = @enabled, next_run_at = @next_run_at WHERE id = @id`
+  ),
+  deleteSite: db.prepare(`DELETE FROM monitored_sites WHERE id = ?`),
+  getDueSites: db.prepare(`SELECT * FROM monitored_sites WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at ASC LIMIT ?`),
+  updateNextRun: db.prepare(`UPDATE monitored_sites SET next_run_at = ?, last_run_at = ? WHERE id = ?`),
+  countUserSites: db.prepare(`SELECT COUNT(*) as cnt FROM monitored_sites WHERE user_id = ? AND enabled = 1`),
+
+  // Snapshots
+  insertSnapshot: db.prepare(
+    `INSERT INTO audit_snapshots (id, monitored_site_id, report_id, seo_score, performance_score, accessibility_score, overall_score, issues_json, competitor_scores, created_at)
+     VALUES (@id, @monitored_site_id, @report_id, @seo_score, @performance_score, @accessibility_score, @overall_score, @issues_json, @competitor_scores, @created_at)`
+  ),
+  getSnapshot: db.prepare(`SELECT * FROM audit_snapshots WHERE id = ?`),
+  getSnapshotsBySite: db.prepare(
+    `SELECT * FROM audit_snapshots WHERE monitored_site_id = ? ORDER BY created_at DESC LIMIT ?`
+  ),
+  getLatestSnapshot: db.prepare(
+    `SELECT * FROM audit_snapshots WHERE monitored_site_id = ? ORDER BY created_at DESC LIMIT 1`
+  ),
+  getTrendsBySite: db.prepare(
+    `SELECT seo_score, performance_score, accessibility_score, overall_score, created_at
+     FROM audit_snapshots WHERE monitored_site_id = ? ORDER BY created_at ASC`
+  ),
+
+  // Roadmaps
+  insertRoadmap: db.prepare(
+    `INSERT INTO roadmaps (id, user_id, monitored_site_id, snapshot_id, roadmap_json, roadmap_html, vertical, created_at)
+     VALUES (@id, @user_id, @monitored_site_id, @snapshot_id, @roadmap_json, @roadmap_html, @vertical, @created_at)`
+  ),
+  getRoadmap: db.prepare(`SELECT * FROM roadmaps WHERE id = ?`),
+  getLatestRoadmapBySite: db.prepare(
+    `SELECT * FROM roadmaps WHERE monitored_site_id = ? ORDER BY created_at DESC LIMIT 1`
+  ),
+  getRoadmapsByUser: db.prepare(`SELECT * FROM roadmaps WHERE user_id = ? ORDER BY created_at DESC LIMIT 20`),
+};
+
+const FREQUENCY_MS = {
+  daily: 24 * 60 * 60 * 1000,
+  weekly: 7 * 24 * 60 * 60 * 1000,
+  biweekly: 14 * 24 * 60 * 60 * 1000,
+  monthly: 30 * 24 * 60 * 60 * 1000,
+};
+
+function createMonitoredSite({ id, userId, url, frequency = 'weekly', competitorUrls = [], notifyOn = null }) {
+  const now = Date.now();
+  monitorStmts.insertSite.run({
+    id,
+    user_id: userId,
+    url,
+    frequency,
+    next_run_at: now, // run immediately on first check
+    competitor_urls: JSON.stringify(competitorUrls.slice(0, 3)),
+    notify_on: JSON.stringify(notifyOn || { score_drop: true, new_issues: true, competitor_change: true }),
+    enabled: 1,
+    created_at: now,
+  });
+}
+
+function getMonitoredSite(id) {
+  const row = monitorStmts.getSite.get(id);
+  return row ? rowToMonitoredSite(row) : null;
+}
+
+function getMonitoredSitesByUser(userId) {
+  return monitorStmts.getSitesByUser.all(userId).map(rowToMonitoredSite);
+}
+
+function updateMonitoredSite(id, { frequency, competitorUrls, notifyOn, enabled }) {
+  const existing = monitorStmts.getSite.get(id);
+  if (!existing) return null;
+  const freq = frequency || existing.frequency;
+  const nextRun = frequency && frequency !== existing.frequency
+    ? Date.now() + (FREQUENCY_MS[freq] || FREQUENCY_MS.weekly)
+    : existing.next_run_at;
+  monitorStmts.updateSite.run({
+    id,
+    frequency: freq,
+    competitor_urls: competitorUrls !== undefined ? JSON.stringify((competitorUrls || []).slice(0, 3)) : existing.competitor_urls,
+    notify_on: notifyOn !== undefined ? JSON.stringify(notifyOn) : existing.notify_on,
+    enabled: enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled,
+    next_run_at: nextRun,
+  });
+  return getMonitoredSite(id);
+}
+
+function deleteMonitoredSite(id) {
+  monitorStmts.deleteSite.run(id);
+}
+
+function getDueSites(limit = 10) {
+  return monitorStmts.getDueSites.all(Date.now(), limit).map(rowToMonitoredSite);
+}
+
+function updateSiteNextRun(id, frequency) {
+  const intervalMs = FREQUENCY_MS[frequency] || FREQUENCY_MS.weekly;
+  const now = Date.now();
+  monitorStmts.updateNextRun.run(now + intervalMs, now, id);
+}
+
+function countUserMonitoredSites(userId) {
+  return monitorStmts.countUserSites.get(userId).cnt;
+}
+
+function rowToMonitoredSite(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    url: row.url,
+    frequency: row.frequency,
+    nextRunAt: row.next_run_at,
+    lastRunAt: row.last_run_at,
+    competitorUrls: JSON.parse(row.competitor_urls || '[]'),
+    notifyOn: JSON.parse(row.notify_on || '{}'),
+    enabled: !!row.enabled,
+    createdAt: row.created_at,
+  };
+}
+
+// ── Audit Snapshots API ──────────────────────────────────────────────────────
+
+function saveSnapshot({ id, monitoredSiteId, reportId, seoScore, performanceScore, accessibilityScore, overallScore, issues, competitorScores }) {
+  monitorStmts.insertSnapshot.run({
+    id,
+    monitored_site_id: monitoredSiteId,
+    report_id: reportId || null,
+    seo_score: seoScore,
+    performance_score: performanceScore,
+    accessibility_score: accessibilityScore,
+    overall_score: overallScore,
+    issues_json: JSON.stringify(issues || []),
+    competitor_scores: JSON.stringify(competitorScores || {}),
+    created_at: Date.now(),
+  });
+}
+
+function getSnapshot(id) {
+  const row = monitorStmts.getSnapshot.get(id);
+  return row ? rowToSnapshot(row) : null;
+}
+
+function getSnapshotsBySite(siteId, limit = 20) {
+  return monitorStmts.getSnapshotsBySite.all(siteId, limit).map(rowToSnapshot);
+}
+
+function getLatestSnapshot(siteId) {
+  const row = monitorStmts.getLatestSnapshot.get(siteId);
+  return row ? rowToSnapshot(row) : null;
+}
+
+function getTrendsBySite(siteId) {
+  return monitorStmts.getTrendsBySite.all(siteId).map(row => ({
+    seoScore: row.seo_score,
+    performanceScore: row.performance_score,
+    accessibilityScore: row.accessibility_score,
+    overallScore: row.overall_score,
+    createdAt: row.created_at,
+  }));
+}
+
+function rowToSnapshot(row) {
+  return {
+    id: row.id,
+    monitoredSiteId: row.monitored_site_id,
+    reportId: row.report_id,
+    seoScore: row.seo_score,
+    performanceScore: row.performance_score,
+    accessibilityScore: row.accessibility_score,
+    overallScore: row.overall_score,
+    issues: JSON.parse(row.issues_json || '[]'),
+    competitorScores: JSON.parse(row.competitor_scores || '{}'),
+    createdAt: row.created_at,
+  };
+}
+
+// ── Roadmaps API ─────────────────────────────────────────────────────────────
+
+function saveRoadmap({ id, userId, monitoredSiteId, snapshotId, roadmapJson, roadmapHtml, vertical }) {
+  monitorStmts.insertRoadmap.run({
+    id,
+    user_id: userId,
+    monitored_site_id: monitoredSiteId || null,
+    snapshot_id: snapshotId || null,
+    roadmap_json: JSON.stringify(roadmapJson || {}),
+    roadmap_html: roadmapHtml || '',
+    vertical: vertical || null,
+    created_at: Date.now(),
+  });
+}
+
+function getRoadmap(id) {
+  const row = monitorStmts.getRoadmap.get(id);
+  return row ? rowToRoadmap(row) : null;
+}
+
+function getLatestRoadmapBySite(siteId) {
+  const row = monitorStmts.getLatestRoadmapBySite.get(siteId);
+  return row ? rowToRoadmap(row) : null;
+}
+
+function getRoadmapsByUser(userId) {
+  return monitorStmts.getRoadmapsByUser.all(userId).map(rowToRoadmap);
+}
+
+function rowToRoadmap(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    monitoredSiteId: row.monitored_site_id,
+    snapshotId: row.snapshot_id,
+    roadmapJson: JSON.parse(row.roadmap_json || '{}'),
+    roadmapHtml: row.roadmap_html,
+    vertical: row.vertical,
+    createdAt: row.created_at,
+  };
+}
+
 /** Cheap liveness check — throws if the DB connection is broken. */
 function ping() {
   db.prepare('SELECT 1').get();
@@ -385,4 +660,25 @@ module.exports = {
   setResetToken,
   getUserByResetToken,
   updatePassword,
+  // Tier 3: Monitoring
+  createMonitoredSite,
+  getMonitoredSite,
+  getMonitoredSitesByUser,
+  updateMonitoredSite,
+  deleteMonitoredSite,
+  getDueSites,
+  updateSiteNextRun,
+  countUserMonitoredSites,
+  FREQUENCY_MS,
+  // Tier 3: Snapshots
+  saveSnapshot,
+  getSnapshot,
+  getSnapshotsBySite,
+  getLatestSnapshot,
+  getTrendsBySite,
+  // Tier 3: Roadmaps
+  saveRoadmap,
+  getRoadmap,
+  getLatestRoadmapBySite,
+  getRoadmapsByUser,
 };
