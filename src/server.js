@@ -1478,10 +1478,14 @@ app.post('/billing/trial', async (req, res) => {
  */
 app.get('/billing/trial/success', async (req, res) => {
   let apiKey = null;
+  let customerEmail = null;
   try {
     const result = await fulfillCheckoutSession(req.query.session_id);
     if (result && result.apiKey) {
       apiKey = result.apiKey;
+    }
+    if (result && result.email) {
+      customerEmail = result.email;
     }
   } catch (err) {
     console.error('[billing/trial/success] session retrieval failed:', err.message);
@@ -1497,8 +1501,20 @@ app.get('/billing/trial/success', async (req, res) => {
     }
   }
 
-  // No session: store the API key in a short-lived cookie and redirect to signup
-  // so the user creates an account first, then the key gets auto-linked.
+  // Look up existing user by email from Stripe session and auto-login
+  if (apiKey && customerEmail) {
+    const existingUser = db.getUserByEmail(customerEmail);
+    if (existingUser) {
+      db.linkUserApiKey(existingUser.id, apiKey);
+      const newSessionToken = crypto.randomBytes(32).toString('hex');
+      db.updateUserSession(existingUser.id, newSessionToken);
+      res.cookie('session', newSessionToken, cookieOpts({ maxAge: 30 * 24 * 60 * 60 * 1000 }));
+      return res.redirect('/dashboard');
+    }
+  }
+
+  // No session and no email match: store the API key in a short-lived cookie
+  // and redirect to signup so the user creates an account first.
   if (apiKey) {
     res.cookie('pending_trial_key', apiKey, cookieOpts({ maxAge: 30 * 60 * 1000, httpOnly: true }));
   }
