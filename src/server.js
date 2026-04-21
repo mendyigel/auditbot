@@ -1945,7 +1945,7 @@ app.post('/audit/full', requireActiveSubscription, async (req, res) => {
   }
 
   // Determine if this user has Pro plan features
-  const isProPlan = !process.env.STRIPE_SECRET_KEY || !req.subscription || req.subscription.planTier !== 'starter';
+  const isProPlan = !process.env.STRIPE_SECRET_KEY || (req.subscription && req.subscription.planTier !== 'starter');
 
   try {
     const tasks = [
