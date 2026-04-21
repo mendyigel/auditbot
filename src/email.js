@@ -271,13 +271,21 @@ function tplPaymentReceipt({ amount = '$29.00', plan = 'OrbioLabs Monthly' } = {
 /**
  * 7. Cancellation confirmation.
  */
-function tplCancellation() {
+function tplCancellation({ wasTrial = false } = {}) {
+  const accessLine = wasTrial
+    ? 'Your access has been revoked immediately. Your data will be retained for 30 days before deletion.'
+    : 'Your access continues until the end of your current billing period. After that, your API key will stop working and your data will be retained for 30 days before deletion.';
   return {
-    subject: 'Your OrbioLabs subscription has been cancelled',
+    subject: wasTrial
+      ? 'Your OrbioLabs trial has been cancelled'
+      : 'Your OrbioLabs subscription has been cancelled',
     html: layout(`
-      ${h1('Subscription cancelled')}
-      ${p("Your OrbioLabs subscription has been cancelled. You won&rsquo;t be charged again.")}
-      ${p('Your access continues until the end of your current billing period. After that, your API key will stop working and your data will be retained for 30 days before deletion.')}
+      ${h1(wasTrial ? 'Trial cancelled' : 'Subscription cancelled')}
+      ${p(wasTrial
+        ? "Your OrbioLabs free trial has been cancelled."
+        : "Your OrbioLabs subscription has been cancelled. You won&rsquo;t be charged again."
+      )}
+      ${p(accessLine)}
       ${hr()}
       ${p('Changed your mind? Resubscribe anytime &mdash; your report history will be restored.')}
       ${btn('Resubscribe', `${APP_URL}/billing/checkout`)}
@@ -294,7 +302,7 @@ async function sendTrialDay10(to)             { return sendEmail({ to, ...tplTri
 async function sendTrialDay13(to)             { return sendEmail({ to, ...tplTrialDay13() }); }
 async function sendTrialExpired(to)           { return sendEmail({ to, ...tplTrialExpired() }); }
 async function sendPaymentReceipt(to, opts)   { return sendEmail({ to, ...tplPaymentReceipt(opts) }); }
-async function sendCancellation(to)           { return sendEmail({ to, ...tplCancellation() }); }
+async function sendCancellation(to, opts)      { return sendEmail({ to, ...tplCancellation(opts) }); }
 
 async function sendPasswordReset(to, { resetUrl }) {
   return sendEmail({

@@ -18,6 +18,7 @@ const {
   lookupSubscription,
   getTrialInfo,
   fulfillCheckoutSession,
+  cancelSubscription,
   TRIAL_AUDIT_LIMIT,
   TRIAL_PDF_LIMIT,
   PLANS,
@@ -460,7 +461,11 @@ ${authNavHtml}
     .catch(function (err) {
       btn.disabled = false;
       btn.textContent = 'Sign in';
-      errEl.textContent = (err && err.error) ? err.error : 'Invalid username or password.';
+      if (err && err.resubscribeUrl) {
+        errEl.innerHTML = err.error + ' <a href="' + err.resubscribeUrl + '" style="color:#3b82f6">Resubscribe</a>';
+      } else {
+        errEl.textContent = (err && err.error) ? err.error : 'Invalid username or password.';
+      }
       errEl.style.display = 'block';
     });
   });
@@ -572,6 +577,18 @@ app.post('/auth/signin', async (req, res) => {
   const valid = await bcrypt.compare(password, user.password_hash);
   if (!valid) {
     return res.status(401).json({ error: 'Invalid username or password.' });
+  }
+
+  // Block cancelled users — they must resubscribe before accessing the site
+  if (user.api_key && process.env.STRIPE_SECRET_KEY) {
+    const sub = lookupSubscription(user.api_key);
+    if (sub && sub.status === 'cancelled') {
+      const appUrl = process.env.APP_URL || '';
+      return res.status(403).json({
+        error: 'Your subscription has been cancelled. Please resubscribe to regain access.',
+        resubscribeUrl: `${appUrl}/billing/checkout`,
+      });
+    }
   }
 
   const sessionToken = crypto.randomBytes(32).toString('hex');
@@ -833,6 +850,38 @@ app.get('/dashboard', (req, res) => {
   const sub = user.api_key ? lookupSubscription(user.api_key) : null;
   const hasActiveSub = sub && (sub.status === 'active' || sub.status === 'trialing' || sub.status === 'cancelling');
 
+  // Redirect cancelled users to a resubscribe page instead of the full dashboard
+  if (sub && sub.status === 'cancelled') {
+    const appUrl = process.env.APP_URL || '';
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(`<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Subscription Cancelled — OrbioLabs</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--brand:#3b82f6;--brand-dark:#2563eb;--bg:#0f172a;--surface:#1e293b;--border:#334155;--text:#f1f5f9;--muted:#94a3b8}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column}
+.top-nav{display:flex;align-items:center;justify-content:space-between;padding:16px 40px;border-bottom:1px solid var(--border)}
+.logo{font-size:1.25rem;font-weight:800;letter-spacing:-0.5px;color:var(--text);text-decoration:none}
+.logo span{color:var(--brand)}
+.centre{flex:1;display:flex;align-items:center;justify-content:center;padding:32px 16px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:48px 40px;max-width:520px;width:100%;text-align:center}
+.card h2{font-size:1.5rem;font-weight:700;margin-bottom:12px}
+.card p{color:var(--muted);line-height:1.6;margin-bottom:28px}
+.btn-resub{display:inline-block;background:var(--brand);color:#fff;font-size:1rem;font-weight:600;padding:14px 36px;border-radius:8px;text-decoration:none;transition:background 0.15s}
+.btn-resub:hover{background:var(--brand-dark);text-decoration:none}
+.signout-link{display:inline-block;margin-top:20px;font-size:0.85rem;color:var(--muted);text-decoration:none;cursor:pointer;background:none;border:none}
+.signout-link:hover{color:var(--text)}
+</style></head><body>
+<nav class="top-nav"><a class="logo" href="/">Orbio<span>Labs</span></a></nav>
+<div class="centre"><div class="card">
+<h2>Subscription Cancelled</h2>
+<p>Your subscription has ended and access to auditing tools is no longer available. Resubscribe to pick up where you left off.</p>
+<a href="${appUrl}/billing/checkout" class="btn-resub">Resubscribe</a>
+<br><button class="signout-link" onclick="fetch('/auth/signout',{method:'POST'}).then(function(){window.location.href='/'})">Sign out</button>
+</div></div></body></html>`);
+  }
+
   let subscriptionHtml = '';
   if (sub) {
     const plan = PLANS[sub.planTier] || PLANS.pro;
@@ -842,9 +891,14 @@ app.get('/dashboard', (req, res) => {
     subscriptionHtml += '<div class="status-row"><span class="status-label">Plan</span><span class="status-value">' + plan.name + '</span></div>';
     subscriptionHtml += '<div class="status-row"><span class="status-label">API Key</span><span class="status-value" style="font-family:monospace;font-size:0.8rem;word-break:break-all">' + sub.apiKey + '</span></div>';
     if (sub.status === 'cancelling') {
+      subscriptionHtml += '<p style="color:#f59e0b;font-size:0.85rem;margin-top:12px">Your subscription will be cancelled at the end of your current billing period. You retain full access until then.</p>';
       subscriptionHtml += '<a href="/billing/portal?key=' + encodeURIComponent(sub.apiKey) + '" class="portal-link">Reactivate subscription</a>';
     } else {
       subscriptionHtml += '<a href="/billing/portal?key=' + encodeURIComponent(sub.apiKey) + '" class="portal-link">Manage subscription</a>';
+      subscriptionHtml += '<button id="cancel-sub-btn" class="portal-link" style="background:#dc2626;margin-top:8px;border:none;cursor:pointer;font-size:1rem;color:#fff;width:100%;padding:12px;border-radius:8px;font-weight:700">'
+        + (sub.status === 'trialing' ? 'Cancel Trial (Immediate)' : 'Cancel Subscription')
+        + '</button>';
+      subscriptionHtml += '<p id="cancel-msg" style="display:none;margin-top:8px;font-size:0.85rem;text-align:center"></p>';
     }
     subscriptionHtml += '</div>';
   } else {
@@ -1085,6 +1139,34 @@ app.get('/dashboard', (req, res) => {
   var hash = window.location.hash.replace('#','');
   if(hash && document.querySelector('[data-tab="'+hash+'"]')){
     document.querySelector('[data-tab="'+hash+'"]').click();
+  }
+
+  // Cancel subscription button
+  var cancelBtn = document.getElementById('cancel-sub-btn');
+  var cancelMsg = document.getElementById('cancel-msg');
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', function() {
+      if (!confirm('Are you sure you want to cancel your subscription?')) return;
+      cancelBtn.disabled = true;
+      cancelBtn.textContent = 'Cancelling…';
+      fetch('/billing/cancel-subscription', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+        .then(function(r) { return r.json().then(function(d) { return r.ok ? d : Promise.reject(d); }); })
+        .then(function(data) {
+          cancelMsg.textContent = data.message;
+          cancelMsg.style.color = '#10b981';
+          cancelMsg.style.display = 'block';
+          cancelBtn.style.display = 'none';
+          if (data.immediate) { setTimeout(function() { window.location.reload(); }, 2000); }
+          else { setTimeout(function() { window.location.reload(); }, 1500); }
+        })
+        .catch(function(err) {
+          cancelMsg.textContent = (err && err.error) || 'Cancellation failed. Please try again.';
+          cancelMsg.style.color = '#ef4444';
+          cancelMsg.style.display = 'block';
+          cancelBtn.disabled = false;
+          cancelBtn.textContent = 'Cancel Subscription';
+        });
+    });
   }
 })();
 </script>
@@ -1380,6 +1462,65 @@ app.get('/billing/portal', async (req, res) => {
     return res.redirect(302, url);
   } catch (err) {
     return res.status(500).json({ error: 'Could not create portal session', detail: err.message });
+  }
+});
+
+/**
+ * POST /billing/cancel-subscription
+ * Cancels the user's subscription with policy-aware behaviour:
+ *   - Trial users → immediate cancellation, access revoked now
+ *   - Paid users  → cancel at end of current billing period
+ * Accepts { apiKey } in body or resolves from session cookie.
+ */
+app.post('/billing/cancel-subscription', async (req, res) => {
+  let apiKey = req.body && req.body.apiKey;
+
+  // Fall back to session cookie
+  if (!apiKey) {
+    const sessionToken = req.cookies && req.cookies.session;
+    if (sessionToken) {
+      const user = db.getUserBySessionToken(sessionToken);
+      if (user && user.api_key) apiKey = user.api_key;
+    }
+  }
+
+  if (!apiKey) {
+    return res.status(401).json({ error: 'Unauthorized. Sign in or provide an API key.' });
+  }
+
+  const sub = lookupSubscription(apiKey);
+  if (!sub) {
+    return res.status(404).json({ error: 'Subscription not found.' });
+  }
+
+  if (sub.status === 'cancelled') {
+    return res.status(400).json({ error: 'Subscription is already cancelled.' });
+  }
+  if (sub.status === 'cancelling') {
+    return res.status(400).json({ error: 'Subscription is already scheduled for cancellation at the end of your billing period.' });
+  }
+
+  try {
+    const result = await cancelSubscription(apiKey);
+    if (result.immediate) {
+      return res.json({
+        ok: true,
+        message: 'Your trial has been cancelled and access has been revoked immediately.',
+        immediate: true,
+      });
+    }
+    const endDate = result.currentPeriodEnd
+      ? new Date(result.currentPeriodEnd * 1000).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+      : 'the end of your current billing period';
+    return res.json({
+      ok: true,
+      message: `Your subscription will be cancelled at the end of your billing period (${endDate}). You retain full access until then.`,
+      immediate: false,
+      accessUntil: endDate,
+    });
+  } catch (err) {
+    console.error('[billing/cancel-subscription error]', err);
+    return res.status(500).json({ error: 'Cancellation failed. Please try again or contact support.', detail: err.message });
   }
 });
 

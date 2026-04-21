@@ -254,6 +254,9 @@ async function handleWebhook(rawBody, signature) {
 
     case 'customer.subscription.deleted': {
       const subscription = data.object;
+      // Check if this was a trial cancellation (before we overwrite the status)
+      const priorSub = db.getSubscriptionByCustomerId(subscription.customer);
+      const wasTrial = priorSub && priorSub.status === 'trialing';
       db.updateSubscriptionStatus({
         customerId: subscription.customer,
         status: 'cancelled',
@@ -261,7 +264,7 @@ async function handleWebhook(rawBody, signature) {
       });
       const cancelledSub = db.getSubscriptionByCustomerId(subscription.customer);
       if (cancelledSub?.email) {
-        email.sendCancellation(cancelledSub.email)
+        email.sendCancellation(cancelledSub.email, { wasTrial })
           .catch((err) => console.error('[email] cancellation email failed:', err.message));
       }
       break;
@@ -395,6 +398,37 @@ async function fulfillCheckoutSession(sessionId) {
   return { apiKey, email: customerEmail, customerId };
 }
 
+/**
+ * Cancel a subscription with policy-aware behaviour:
+ *   - Trialing users → immediate cancellation (access revoked now)
+ *   - Paid users     → cancel at period end (access until billing cycle ends)
+ *
+ * Returns { immediate: boolean, currentPeriodEnd: number|null }
+ */
+async function cancelSubscription(apiKey) {
+  const sub = db.getSubscriptionByApiKey(apiKey);
+  if (!sub) throw new Error('Subscription not found');
+  if (!sub.subscriptionId) throw new Error('No Stripe subscription linked');
+
+  const stripe = getStripe();
+  const isTrial = sub.status === 'trialing';
+
+  if (isTrial) {
+    // Immediate cancellation — Stripe fires customer.subscription.deleted webhook
+    await stripe.subscriptions.cancel(sub.subscriptionId);
+    return { immediate: true, currentPeriodEnd: null };
+  }
+
+  // Paid user — cancel at end of current billing period
+  const updated = await stripe.subscriptions.update(sub.subscriptionId, {
+    cancel_at_period_end: true,
+  });
+  return {
+    immediate: false,
+    currentPeriodEnd: updated.current_period_end || null,
+  };
+}
+
 module.exports = {
   lookupSubscription,
   isActive,
@@ -408,4 +442,5 @@ module.exports = {
   handleWebhook,
   createPortalSession,
   fulfillCheckoutSession,
+  cancelSubscription,
 };
