@@ -25,10 +25,10 @@ async function auditUrl(url, options = {}) {
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       },
     });
-    clearTimeout(timer);
     html = await response.text();
+    clearTimeout(timer);
   } catch (err) {
-    fetchError = err.message;
+    fetchError = err.type === 'aborted' ? 'Request timed out' : err.message;
   }
 
   const ttfbMs = Date.now() - startAt;

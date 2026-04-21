@@ -733,13 +733,20 @@ function generateLandingPage() {
       errEl.style.display = 'none';
       resultsEl.style.display = 'none';
 
+      var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      var timeout = setTimeout(function () {
+        if (controller) controller.abort();
+      }, 30000);
+
       fetch('/audit/free', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url })
+        body: JSON.stringify({ url: url }),
+        signal: controller ? controller.signal : undefined
       })
       .then(function (r) { return r.json(); })
       .then(function (data) {
+        clearTimeout(timeout);
         btn.disabled = false;
         btn.textContent = 'Audit this site';
         if (data.error && !data.scores) {
@@ -750,6 +757,7 @@ function generateLandingPage() {
         renderResults(data);
       })
       .catch(function () {
+        clearTimeout(timeout);
         btn.disabled = false;
         btn.textContent = 'Audit this site';
         errEl.textContent = 'Something went wrong. Please try again.';

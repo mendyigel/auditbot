@@ -1156,9 +1156,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     if(!url) return;
     btn.disabled=true; btn.textContent="Auditing…";
     errEl.style.display="none"; resultsEl.style.display="none";
-    fetch("/audit",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url})})
+    var ac=typeof AbortController!=="undefined"?new AbortController():null;
+    var to=setTimeout(function(){if(ac)ac.abort();},30000);
+    fetch("/audit",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url}),signal:ac?ac.signal:undefined})
     .then(function(r){return r.json()})
     .then(function(data){
+      clearTimeout(to);
       btn.disabled=false; btn.textContent="Audit";
       if(data.error && !data.scores){errEl.textContent=data.detail||data.error;errEl.style.display="block";return;}
       var s=data.scores;
@@ -1181,7 +1184,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
       // Invalidate reports cache so next tab visit reloads
       window._reportsLoaded = false;
     })
-    .catch(function(){btn.disabled=false;btn.textContent="Audit";errEl.textContent="Something went wrong. Please try again.";errEl.style.display="block";});
+    .catch(function(){clearTimeout(to);btn.disabled=false;btn.textContent="Audit";errEl.textContent="Something went wrong. Please try again.";errEl.style.display="block";});
   });
   ` : ''}
 
