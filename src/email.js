@@ -126,24 +126,33 @@ const codeBlock = (text) =>
  * 1. Welcome — sent immediately on account confirmation / checkout complete.
  */
 function tplWelcome({ apiKey }) {
-  const snippet =
-    `curl -X POST ${APP_URL}/audit \\<br>` +
-    `&nbsp;&nbsp;-H "Content-Type: application/json" \\<br>` +
-    `&nbsp;&nbsp;-H "Authorization: Bearer ${apiKey}" \\<br>` +
-    `&nbsp;&nbsp;-d '{"url":"https://yoursite.com"}'`;
-
   return {
-    subject: 'Your OrbioLabs API key is ready',
+    subject: 'Welcome to OrbioLabs — run your first audit',
     html: layout(`
-      ${h1('Welcome to OrbioLabs')}
-      ${p('Your subscription is active. Here&rsquo;s your API key &mdash; keep it safe:')}
-      ${codeBlock(apiKey)}
-      ${p('Run your first audit:')}
-      <pre style="background:#0f172a;color:#e2e8f0;padding:16px;border-radius:6px;font-size:13px;overflow-x:auto;margin:0 0 24px;line-height:1.6;">${snippet}</pre>
-      ${p('OrbioLabs checks SEO, performance (Core Web Vitals), and accessibility &mdash; and returns a shareable report link in seconds.')}
-      ${btn('View API Docs', `${APP_URL}/api`)}
+      ${h1('You&rsquo;re in! Let&rsquo;s audit your first site.')}
+      ${p('Your OrbioLabs subscription is now active. In under 30 seconds you can get a full SEO, performance, and accessibility report for any website.')}
+      ${btn('Run Your First Audit', `${APP_URL}/`)}
       ${hr()}
-      ${p('<strong>3 things to do first:</strong><br>1. Run an audit on your own site<br>2. Download the PDF report for a client<br>3. Share the report link &mdash; it works without any account')}
+      <p style="margin:0 0 12px;font-size:15px;font-weight:600;color:${B.dark};">What you&rsquo;ll get in every report:</p>
+      <table cellpadding="0" cellspacing="0" style="width:100%;margin:0 0 24px;">
+        <tr><td style="padding:8px 0;border-bottom:1px solid #f3f4f6;">
+          <span style="color:${B.success};font-weight:700;margin-right:8px;">&#10003;</span>
+          <span style="font-size:15px;color:#374151;"><strong>SEO</strong> &mdash; title tags, meta, canonicals, structured data</span>
+        </td></tr>
+        <tr><td style="padding:8px 0;border-bottom:1px solid #f3f4f6;">
+          <span style="color:${B.success};font-weight:700;margin-right:8px;">&#10003;</span>
+          <span style="font-size:15px;color:#374151;"><strong>Performance</strong> &mdash; Core Web Vitals, LCP, CLS, render-blocking resources</span>
+        </td></tr>
+        <tr><td style="padding:8px 0;">
+          <span style="color:${B.success};font-weight:700;margin-right:8px;">&#10003;</span>
+          <span style="font-size:15px;color:#374151;"><strong>Accessibility</strong> &mdash; WCAG 2.1 AA: contrast, ARIA, keyboard nav</span>
+        </td></tr>
+      </table>
+      ${p('Each report is shareable via link and exportable as a white-label PDF &mdash; perfect for sending to clients.')}
+      ${hr()}
+      ${p('<strong>Your API key</strong> (for programmatic access):')}
+      ${codeBlock(apiKey)}
+      ${p('You can find this key anytime in your <a href="' + APP_URL + '/account" style="color:' + B.blue + ';text-decoration:underline;">account dashboard</a>. Check the <a href="' + APP_URL + '/api" style="color:' + B.blue + ';text-decoration:underline;">API docs</a> if you want to integrate audits into your own tools.')}
     `),
   };
 }
