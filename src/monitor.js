@@ -201,24 +201,35 @@ async function detectChangesAndNotify(site, current, previous) {
     }
   }
 
-  // Competitor overtake
+  // Competitor overtake — only fire when competitor newly surpasses site score
   if (notifyOn.competitor_change && Object.keys(current.competitorScores).length > 0) {
+    const categoryChecks = [
+      { name: 'SEO', currSite: current.seoScore, prevSite: previous.seoScore, key: 'seo' },
+      { name: 'Performance', currSite: current.performanceScore, prevSite: previous.performanceScore, key: 'performance' },
+      { name: 'Accessibility', currSite: current.accessibilityScore, prevSite: previous.accessibilityScore, key: 'accessibility' },
+    ];
+
     for (const [compUrl, compScores] of Object.entries(current.competitorScores)) {
       const prevComp = previous.competitorScores?.[compUrl];
       if (!prevComp) continue;
 
-      // Check if competitor overtook user in any category
-      if (compScores.seo > current.seoScore && (!prevComp || prevComp.seo <= previous.seoScore)) {
-        try {
-          await emailService.sendMonitoringAlert({
-            type: 'competitor_overtake',
-            siteUrl: site.url,
-            competitorUrl: compUrl,
-            category: 'SEO',
-            userId: site.userId,
-          });
-        } catch (err) {
-          console.error(`[monitor] Failed to send competitor alert:`, err.message);
+      for (const cat of categoryChecks) {
+        const wasAhead = prevComp[cat.key] > cat.prevSite;
+        const isAhead = compScores[cat.key] > cat.currSite;
+
+        // Only alert on transition from behind/tied to ahead
+        if (isAhead && !wasAhead) {
+          try {
+            await emailService.sendMonitoringAlert({
+              type: 'competitor_overtake',
+              siteUrl: site.url,
+              competitorUrl: compUrl,
+              category: cat.name,
+              userId: site.userId,
+            });
+          } catch (err) {
+            console.error(`[monitor] Failed to send competitor alert:`, err.message);
+          }
         }
       }
     }
