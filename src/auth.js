@@ -41,6 +41,48 @@ function resolveApiKey(req) {
   return { apiKey: null, user: null };
 }
 
+/**
+ * Renders a styled HTML upgrade page for gated features (PDF export, trial limits).
+ */
+function upgradePage({ title, heading, detail, upgradeUrl, ctaText }) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${title} — OrbioLabs</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; min-height: 100vh; display: flex; flex-direction: column; }
+    header { background: #1a1a2e; color: #fff; padding: 20px 32px; }
+    header h1 { font-size: 1.2rem; font-weight: 700; }
+    .upgrade-container { flex: 1; display: flex; align-items: center; justify-content: center; padding: 32px 16px; }
+    .upgrade-card { background: #fff; border-radius: 12px; padding: 48px 40px; max-width: 520px; width: 100%; text-align: center; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+    .upgrade-icon { font-size: 3rem; margin-bottom: 20px; }
+    .upgrade-card h2 { font-size: 1.5rem; font-weight: 700; color: #1a1a2e; margin-bottom: 12px; }
+    .upgrade-card p { font-size: 1rem; color: #4a5568; line-height: 1.6; margin-bottom: 32px; }
+    .btn-upgrade { display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; font-size: 1rem; font-weight: 600; padding: 14px 36px; border-radius: 8px; text-decoration: none; transition: transform 0.15s, box-shadow 0.15s; }
+    .btn-upgrade:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(102,126,234,0.4); }
+    .back-link { display: inline-block; margin-top: 20px; font-size: 0.85rem; color: #718096; text-decoration: none; }
+    .back-link:hover { color: #4a5568; }
+  </style>
+</head>
+<body>
+  <header><h1>OrbioLabs</h1></header>
+  <div class="upgrade-container">
+    <div class="upgrade-card">
+      <div class="upgrade-icon">\u{1F4C4}</div>
+      <h2>${heading}</h2>
+      <p>${detail}</p>
+      <a href="${upgradeUrl}" class="btn-upgrade">${ctaText}</a>
+      <br>
+      <a href="javascript:history.back()" class="back-link">&larr; Go back</a>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TRIAL_DAYS = 14;
 
@@ -151,23 +193,26 @@ function requirePdfAllowed(req, res, next) {
   // Starter tier: no PDF export
   if (sub.planTier === 'starter') {
     const appUrl = process.env.APP_URL || '';
-    return res.status(402).json({
-      error: 'PDF export not available on Starter plan',
-      detail: 'Upgrade to Pro for white-label PDF exports.',
-      plan: 'starter',
-      upgradeUrl: `${appUrl}/billing/checkout?tier=pro`,
-    });
+    const upgradeUrl = `${appUrl}/billing/checkout?tier=pro`;
+    return res.status(402).send(upgradePage({
+      title: 'PDF Export — Pro Feature',
+      heading: 'PDF export is a Pro feature',
+      detail: 'White-label PDF reports are available on the Pro plan. Upgrade to generate branded, downloadable reports for your clients.',
+      upgradeUrl,
+      ctaText: 'Upgrade to Pro',
+    }));
   }
 
   if (sub.status === 'trialing' && sub.pdfCount >= TRIAL_PDF_LIMIT) {
     const appUrl = process.env.APP_URL || '';
-    return res.status(402).json({
-      error: 'Trial PDF limit reached',
-      detail: `You've used all ${TRIAL_PDF_LIMIT} trial PDF exports. Upgrade for unlimited exports.`,
-      pdfsUsed:    sub.pdfCount,
-      pdfsLimit:   TRIAL_PDF_LIMIT,
-      upgradeUrl: `${appUrl}/billing/checkout`,
-    });
+    const upgradeUrl = `${appUrl}/billing/checkout`;
+    return res.status(402).send(upgradePage({
+      title: 'PDF Export Limit Reached',
+      heading: 'Trial PDF limit reached',
+      detail: `You\u2019ve used all ${TRIAL_PDF_LIMIT} trial PDF exports. Upgrade to a paid plan for unlimited PDF exports.`,
+      upgradeUrl,
+      ctaText: 'Upgrade Now',
+    }));
   }
 
   next();
