@@ -821,7 +821,7 @@ app.get('/dashboard', (req, res) => {
   if (!user) return res.redirect('/signin');
 
   const sub = user.api_key ? lookupSubscription(user.api_key) : null;
-  const hasActiveSub = sub && (sub.status === 'active' || sub.status === 'trialing');
+  const hasActiveSub = sub && (sub.status === 'active' || sub.status === 'trialing' || sub.status === 'cancelling');
 
   let subscriptionHtml = '';
   if (sub) {
