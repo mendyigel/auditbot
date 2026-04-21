@@ -340,18 +340,8 @@ async function sendTest(to) {
 // ── Monitoring Alert Emails ──────────────────────────────────────────────────
 
 async function sendMonitoringAlert({ type, siteUrl, category, oldScore, newScore, competitorUrl, userId }) {
-  // Look up user email from userId
   const db = require('./db');
-  const user = userId ? (() => {
-    // Find user and their subscription email
-    try {
-      const userRow = db.getUserBySessionToken(null); // fallback
-      return null;
-    } catch (_) { return null; }
-  })() : null;
 
-  // For now, log the alert — email delivery requires user email lookup
-  // which will be wired up when the dashboard provides the email context
   const subjects = {
     score_drop: `⚠️ ${siteUrl}: ${category} score dropped ${oldScore} → ${newScore}`,
     score_improvement: `✅ ${siteUrl}: Overall score improved ${oldScore} → ${newScore}!`,
@@ -360,8 +350,33 @@ async function sendMonitoringAlert({ type, siteUrl, category, oldScore, newScore
     weekly_digest: `📈 Weekly SEO report for ${siteUrl}`,
   };
 
-  console.log(`[email] Monitoring alert (${type}): ${subjects[type] || type}`);
-  // TODO: wire up actual email delivery once user email resolution is in place
+  const subject = subjects[type] || `OrbioLabs alert: ${type}`;
+
+  if (!userId) {
+    console.log(`[email] Monitoring alert (${type}): no userId — skipping`);
+    return { skipped: true, reason: 'no_user_id' };
+  }
+
+  const user = db.getUserById(userId);
+  if (!user || !user.email) {
+    console.log(`[email] Monitoring alert (${type}): user ${userId} has no email — skipping`);
+    return { skipped: true, reason: 'no_email' };
+  }
+
+  const bodyMap = {
+    score_drop: `<p>Your <strong>${category}</strong> score for <a href="${siteUrl}">${siteUrl}</a> dropped from <strong>${oldScore}</strong> to <strong>${newScore}</strong>.</p><p>Log in to your <a href="${APP_URL}/dashboard">dashboard</a> to review the details and see recommendations.</p>`,
+    score_improvement: `<p>Great news! The overall score for <a href="${siteUrl}">${siteUrl}</a> improved from <strong>${oldScore}</strong> to <strong>${newScore}</strong>.</p><p>Keep up the good work! Check your <a href="${APP_URL}/dashboard">dashboard</a> for the full report.</p>`,
+    competitor_overtake: `<p>Heads up — <strong>${competitorUrl}</strong> now outranks <a href="${siteUrl}">${siteUrl}</a> in <strong>${category}</strong>.</p><p>Visit your <a href="${APP_URL}/dashboard">dashboard</a> to review your AI-generated roadmap for improvement ideas.</p>`,
+    new_critical_issue: `<p>A new critical issue was detected on <a href="${siteUrl}">${siteUrl}</a>.</p><p>Check your <a href="${APP_URL}/dashboard">dashboard</a> for details.</p>`,
+    weekly_digest: `<p>Your weekly SEO report for <a href="${siteUrl}">${siteUrl}</a> is ready.</p><p>View the full report on your <a href="${APP_URL}/dashboard">dashboard</a>.</p>`,
+  };
+
+  const html = layout(`
+    <h2 style="color:${B.dark};margin:0 0 16px">${subject}</h2>
+    ${bodyMap[type] || `<p>${subject}</p>`}
+  `);
+
+  return sendEmail({ to: user.email, subject, html });
 }
 
 module.exports = {

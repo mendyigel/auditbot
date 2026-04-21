@@ -186,6 +186,7 @@ const stmts = {
     `INSERT INTO users (id, username, password_hash, email, api_key, session_token, created_at)
      VALUES (@id, @username, @password_hash, @email, @api_key, @session_token, @created_at)`
   ),
+  getUserById: db.prepare(`SELECT * FROM users WHERE id = ?`),
   getUserByUsername: db.prepare(`SELECT * FROM users WHERE username = ? COLLATE NOCASE`),
   getUserBySessionToken: db.prepare(`SELECT * FROM users WHERE session_token = ?`),
   updateUserSession: db.prepare(`UPDATE users SET session_token = ? WHERE id = ?`),
@@ -362,6 +363,10 @@ function createUser({ id, username, passwordHash, email = null, apiKey = null, s
     session_token: sessionToken,
     created_at: Date.now(),
   });
+}
+
+function getUserById(id) {
+  return stmts.getUserById.get(id) || null;
 }
 
 function getUserByUsername(username) {
@@ -652,6 +657,7 @@ module.exports = {
   incrementMonthlyAuditCount,
   getMonthlyAuditCount,
   createUser,
+  getUserById,
   getUserByUsername,
   getUserBySessionToken,
   updateUserSession,
