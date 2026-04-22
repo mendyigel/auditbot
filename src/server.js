@@ -1437,8 +1437,18 @@ app.get('/billing/checkout', async (req, res) => {
     });
     return res.redirect(303, url);
   } catch (err) {
-    console.error('[billing/checkout GET error]', err);
-    return res.redirect('/signin');
+    console.error('[billing/checkout GET error]', err.message, err.stack);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(500).send(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>OrbioLabs — Checkout Error</title>
+<style>body{font-family:system-ui,sans-serif;max-width:600px;margin:80px auto;padding:0 24px;color:#111}</style>
+</head>
+<body>
+<h1>Checkout unavailable</h1>
+<p>We couldn't start the payment process right now. Please try again in a few minutes.</p>
+<p><a href="/billing/checkout">Retry</a> · <a href="/">Back to home</a></p>
+</body></html>`);
   }
 });
 
