@@ -1209,7 +1209,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
       }
       var html = '<table class="reports-table"><thead><tr><th>Site</th><th>Frequency</th><th>Score</th><th>Status</th><th></th></tr></thead><tbody>';
       sites.forEach(function(s) {
-        var shortUrl = s.url.replace(/^https?:\\\\/\\\\//, '').slice(0, 35);
+        var shortUrl = s.url.replace(/^https?:\\/\\//, '').slice(0, 35);
         var score = s.latestSnapshot ? s.latestSnapshot.overallScore : '—';
         var scoreClass = s.latestSnapshot ? (s.latestSnapshot.overallScore >= 80 ? 'score-good' : s.latestSnapshot.overallScore >= 50 ? 'score-mid' : 'score-bad') : '';
         var status = s.enabled ? '<span style="color:#4ade80">Active</span>' : '<span style="color:var(--muted)">Paused</span>';
