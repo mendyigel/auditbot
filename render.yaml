@@ -13,4 +13,8 @@ services:
     customDomains:
       - name: orbiolab.com
       - name: www.orbiolab.com
+    disk:
+      name: auditbot-data
+      mountPath: /app/data
+      sizeGB: 1
     autoDeploy: false
