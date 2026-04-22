@@ -1421,10 +1421,25 @@ app.get('/api/my-reports', (req, res) => {
 
 /**
  * GET /billing/checkout
- * Redirect to sign-in page (old bookmarks / direct navigation).
+ * Creates a Stripe Checkout session and redirects the browser to it.
+ * Accepts optional ?tier=pro|starter query param (defaults to 'pro').
+ * Used by upsell pages that link directly to this route.
  */
-app.get('/billing/checkout', (_req, res) => {
-  res.redirect(301, '/signin');
+app.get('/billing/checkout', async (req, res) => {
+  try {
+    const tier = req.query.tier === 'starter' ? 'starter' : 'pro';
+    const base = getBaseUrl(req);
+    const { url } = await createCheckoutSession({
+      email: undefined,
+      tier,
+      successUrl: `${base}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancelUrl: `${base}/billing/cancel`,
+    });
+    return res.redirect(303, url);
+  } catch (err) {
+    console.error('[billing/checkout GET error]', err);
+    return res.redirect('/signin');
+  }
 });
 
 /**
