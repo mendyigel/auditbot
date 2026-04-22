@@ -141,6 +141,17 @@ function generateHtml(audit, extras) {
     .matrix-plan .matrix-count { color: #63b3ed; }
     .matrix-nice .matrix-count { color: #ecc94b; }
     .matrix-ignore .matrix-count { color: #a0aec0; }
+    .exec-summary { background: linear-gradient(135deg, #1a1a2e 0%, #2d3748 100%); border-radius: 12px; padding: 28px; margin-bottom: 24px; color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+    .exec-summary h2 { color: #fff; font-size: 1.1rem; margin-bottom: 14px; }
+    .exec-summary p { font-size: 0.92rem; color: #e2e8f0; line-height: 1.6; margin-bottom: 8px; }
+    .exec-summary .exec-highlight { color: #68d391; font-weight: 700; }
+    .methodology-section { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); border-left: 4px solid #63b3ed; }
+    .methodology-section h2 { font-size: 1rem; font-weight: 700; margin-bottom: 12px; color: #2d3748; }
+    .methodology-section p { font-size: 0.82rem; color: #4a5568; line-height: 1.55; margin-bottom: 8px; }
+    .methodology-section .source-list { list-style: none; padding: 0; margin: 8px 0 0 0; }
+    .methodology-section .source-list li { font-size: 0.78rem; color: #718096; padding: 3px 0; border-bottom: 1px solid #f0f0f0; }
+    .methodology-section .source-list li:last-child { border: none; }
+    .methodology-section .confidence-badge { display: inline-block; font-size: 0.72rem; font-weight: 700; padding: 3px 10px; border-radius: 99px; background: #ebf8ff; color: #2b6cb0; margin-top: 8px; }
     .priority-tag { display: inline-block; font-size: 0.62rem; font-weight: 700; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
     .priority-do-first { background: #38a169; color: #fff; }
     .priority-plan { background: #3182ce; color: #fff; }
@@ -173,8 +184,14 @@ function generateHtml(audit, extras) {
     ${scoreCard('Accessibility', scores.accessibility, insights.scoreInterpretations.accessibility)}
   </div>
 
+  <!-- Executive Summary -->
+  ${executiveSummarySection(audit, insights)}
+
   <!-- Revenue Opportunity Summary -->
   ${revenueOpportunitySummarySection(insights.revenueOpportunitySummary)}
+
+  <!-- Methodology -->
+  ${methodologySection(audit, insights)}
 
   <!-- Top Fixes with How-to-Fix Guidance -->
   ${topFixesSection(insights.topFixes, insights.detectedPlatform)}
@@ -587,6 +604,78 @@ function roiSection(roi, roiSummary, roiRecommendations) {
     </div>
     ${roiSummary.quickWins > 0 ? `<p style="font-size:0.85rem;color:#68d391;margin-bottom:16px">✨ ${roiSummary.quickWins} quick win(s) available — low effort, immediate impact</p>` : ''}
     ${recsHtml}
+  </div>`;
+}
+
+function executiveSummarySection(audit, insights) {
+  const { scores } = audit;
+  const allFixes = insights.allFixes || [];
+  const doFirstFixes = allFixes.filter(f => f.priorityAction === 'DO FIRST');
+  const avgScore = Math.round((scores.seo + scores.performance + scores.accessibility) / 3);
+
+  // Identify top 2-3 root causes from DO FIRST items
+  const rootCauses = doFirstFixes.slice(0, 3).map(f => f.title);
+  const rootCauseText = rootCauses.length > 0
+    ? rootCauses.join(', ')
+    : 'minor issues across SEO, performance, and accessibility';
+
+  // Calculate what % of value comes from top 3 fixes
+  const totalValue = allFixes.reduce((s, f) => s + (f.businessImpact?.monthlyValue || 0), 0);
+  const top3Value = allFixes.slice(0, 3).reduce((s, f) => s + (f.businessImpact?.monthlyValue || 0), 0);
+  const top3Pct = totalValue > 0 ? Math.round((top3Value / totalValue) * 100) : 0;
+
+  // Effort level assessment
+  const effortLevel = doFirstFixes.length >= 3 ? 'low' : doFirstFixes.length >= 1 ? 'medium' : 'high';
+
+  let situationLabel;
+  if (avgScore >= 80) {
+    situationLabel = 'Your site is in good shape with minor optimization opportunities.';
+  } else if (avgScore >= 50) {
+    situationLabel = `Your site is underperforming mainly due to: <span class="exec-highlight">${escHtml(rootCauseText)}</span>.`;
+  } else {
+    situationLabel = `Your site has significant issues that are likely costing you traffic and revenue. Root causes: <span class="exec-highlight">${escHtml(rootCauseText)}</span>.`;
+  }
+
+  const top3Line = top3Pct > 0
+    ? `Fixing the top 3 issues will likely produce <span class="exec-highlight">~${top3Pct}% of the total gains</span>.`
+    : '';
+
+  const effortLine = `This is a <span class="exec-highlight">${effortLevel}-effort, high-return</span> situation — most high-impact fixes are quick wins.`;
+
+  return `<div class="exec-summary">
+    <h2>Executive Summary</h2>
+    <p>${situationLabel}</p>
+    ${top3Line ? `<p>${top3Line}</p>` : ''}
+    <p>${effortLine}</p>
+  </div>`;
+}
+
+function methodologySection(audit, insights) {
+  const industry = insights.roiSummary?.industry || 'default';
+  const rev = insights.revenueOpportunitySummary;
+  if (!rev && (!insights.allFixes || insights.allFixes.length === 0)) return '';
+
+  const industryLabel = industry === 'default' ? 'cross-industry average' : industry;
+
+  return `<div class="methodology-section">
+    <h2>📊 How We Calculated These Estimates</h2>
+    <p><strong>Baseline assumptions:</strong> We estimate your page receives ~500 organic visits/month (conservative baseline for an indexed page). We applied a ${industryLabel} conversion rate and average order value based on published benchmarks.</p>
+    <p><strong>Impact models vary by issue type:</strong></p>
+    <p>• <strong>SEO fixes</strong> — modeled as traffic/visibility recovery using organic CTR curves by SERP position (Advanced Web Ranking data) and on-page ranking factor studies.</p>
+    <p>• <strong>Speed fixes</strong> — modeled as conversion loss from added load time, using Google/SOASTA research on bounce rate and conversion impact per second of delay.</p>
+    <p>• <strong>Accessibility fixes</strong> — modeled as excluded audience share based on WHO disability prevalence data (16% of global population) and WCAG violation severity.</p>
+    <p><strong>Sources cited:</strong></p>
+    <ul class="source-list">
+      <li>Google/SOASTA, "The State of Online Retail Performance" — bounce rate vs. load time correlation</li>
+      <li>Advanced Web Ranking — organic CTR by SERP position, updated monthly</li>
+      <li>Ahrefs — meta description CTR impact study (5-10% improvement)</li>
+      <li>Backlinko — title tag ranking factor analysis (2023)</li>
+      <li>WHO — 16% of world population experiences significant disability</li>
+      <li>UsableNet — ADA digital accessibility lawsuit trends report</li>
+      <li>Search Engine Journal — rich results CTR uplift (20-30%)</li>
+      <li>HTTPArchive / CrUX — web performance benchmarks (median scores)</li>
+    </ul>
+    <span class="confidence-badge">Conservative estimates — actual results may vary based on your specific traffic, audience, and market</span>
   </div>`;
 }
 

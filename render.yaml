@@ -13,4 +13,4 @@ services:
     customDomains:
       - name: orbiolab.com
       - name: www.orbiolab.com
-    autoDeploy: true
+    autoDeploy: false

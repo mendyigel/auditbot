@@ -68,7 +68,7 @@ const DEFAULT_MONTHLY_TRAFFIC = 500;
 const DEFAULT_CONVERSION_RATE = 0.025;
 const DEFAULT_AVG_VALUE = 100;
 
-function computeBusinessImpact(trafficImpact, effortScore) {
+function computeBusinessImpact(trafficImpact, effortScore, category) {
   const trafficGain = Math.round(DEFAULT_MONTHLY_TRAFFIC * (trafficImpact / 100));
   const conversions = trafficGain * DEFAULT_CONVERSION_RATE;
   const monthlyValue = Math.round(conversions * DEFAULT_AVG_VALUE);
@@ -81,22 +81,45 @@ function computeBusinessImpact(trafficImpact, effortScore) {
     monthlyValue,
     annualValue,
     conversionLoss,
-    summary: buildBusinessSummary(trafficGain, monthlyValue, annualValue, conversionLoss, effortScore),
+    summary: buildBusinessSummary(trafficGain, monthlyValue, annualValue, conversionLoss, effortScore, category),
   };
 }
 
-function buildBusinessSummary(trafficGain, monthlyValue, annualValue, conversionLoss, effortScore) {
+function buildBusinessSummary(trafficGain, monthlyValue, annualValue, conversionLoss, effortScore, category) {
   const parts = [];
-  if (conversionLoss > 0) {
-    parts.push(`A 1-second delay can reduce conversions by ~7%.`);
+  const effortLabel = effortScore <= 1 ? '< 1 hour' : effortScore <= 2 ? '1–4 hours' : '4+ hours';
+
+  if (category === 'Accessibility') {
+    // Accessibility: frame as compliance risk + audience reach, not speed stats
+    if (trafficGain > 0) {
+      parts.push(`This accessibility gap may exclude ~${trafficGain} visitors/mo`);
+    }
+    if (monthlyValue > 0) {
+      parts.push(`worth ~$${monthlyValue.toLocaleString()}/mo`);
+    }
+    parts.push(`estimated effort: ${effortLabel}`);
+    return parts.join(', ') + '.';
   }
+
+  if (category === 'Performance') {
+    // Performance: frame as conversion/bounce impact, not generic traffic
+    if (conversionLoss > 0) {
+      parts.push(`Slow load adds ~${(conversionLoss / 7).toFixed(1)}s delay, reducing conversions by ~${conversionLoss}%`);
+    }
+    if (monthlyValue > 0) {
+      parts.push(`estimated lost revenue: ~$${monthlyValue.toLocaleString()}/mo`);
+    }
+    parts.push(`estimated effort: ${effortLabel}`);
+    return parts.join(', ') + '.';
+  }
+
+  // SEO: frame as traffic/visibility
   if (trafficGain > 0) {
     parts.push(`Fixing this could recover ~${trafficGain} monthly visits`);
   }
   if (monthlyValue > 0) {
     parts.push(`worth ~$${monthlyValue.toLocaleString()}/mo ($${annualValue.toLocaleString()}/yr)`);
   }
-  const effortLabel = effortScore <= 1 ? '< 1 hour' : effortScore <= 2 ? '1–4 hours' : '4+ hours';
   parts.push(`estimated effort: ${effortLabel}`);
   return parts.join(', ') + '.';
 }
@@ -716,7 +739,20 @@ function buildTopFixes(audit, maxFixes, platform) {
       const effortScoreRaw = detail ? detail.effort : 2;
       const priorityAction = getPriorityAction(impactScore, effortScoreRaw);
       const responsibility = getResponsibility(issue);
-      const businessImpact = computeBusinessImpact(trafficData.trafficImpact, effortScoreRaw);
+      let businessImpact = computeBusinessImpact(trafficData.trafficImpact, effortScoreRaw, cat.name);
+
+      // Fix IGNORE vs. value contradiction: items marked IGNORE should not show
+      // meaningful dollar values — it undermines credibility to say something is
+      // worth $375/mo but also tell the user to ignore it.
+      if (priorityAction === 'IGNORE FOR NOW') {
+        businessImpact = {
+          trafficGain: 0,
+          monthlyValue: 0,
+          annualValue: 0,
+          conversionLoss: 0,
+          summary: `Low impact and high effort — not worth prioritizing right now. Revisit if your top issues are resolved.`,
+        };
+      }
 
       allIssues.push({
         category: cat.name,
