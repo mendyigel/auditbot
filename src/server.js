@@ -50,6 +50,15 @@ function cookieOpts(extra = {}) {
   return opts;
 }
 
+/** Derive the base URL from the incoming request's host header, so Stripe
+ *  redirects always return to the same origin the user is browsing on. */
+function getBaseUrl(req) {
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  if (host) return `${proto}://${host}`;
+  return process.env.APP_URL || `http://localhost:${PORT}`;
+}
+
 // Report TTL — default 30 days; set REPORT_TTL_DAYS env var to override
 const REPORT_TTL_MS = (parseInt(process.env.REPORT_TTL_DAYS, 10) || 30) * 24 * 60 * 60 * 1000;
 
@@ -541,7 +550,7 @@ app.post('/auth/signup', async (req, res) => {
 
     // If a tier was selected, create Stripe trial checkout and redirect there
     if (tier && process.env.STRIPE_SECRET_KEY) {
-      const base = process.env.APP_URL || `http://localhost:${PORT}`;
+      const base = getBaseUrl(req);
       const { url } = await createTrialCheckoutSession({
         email: email,
         tier,
@@ -1430,7 +1439,7 @@ app.post('/billing/checkout', async (req, res) => {
     if (tier !== 'starter' && tier !== 'pro') {
       return res.status(400).json({ error: 'Invalid tier. Must be "starter" or "pro".' });
     }
-    const base = process.env.APP_URL || `http://localhost:${PORT}`;
+    const base = getBaseUrl(req);
     const { url, sessionId } = await createCheckoutSession({
       email: email || undefined,
       tier,
@@ -1456,7 +1465,7 @@ app.post('/billing/trial', async (req, res) => {
     if (tier !== 'starter' && tier !== 'pro') {
       return res.status(400).json({ error: 'Invalid tier. Must be "starter" or "pro".' });
     }
-    const base = process.env.APP_URL || `http://localhost:${PORT}`;
+    const base = getBaseUrl(req);
     const { url, sessionId } = await createTrialCheckoutSession({
       email: email || undefined,
       tier,
