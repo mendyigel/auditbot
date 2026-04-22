@@ -59,6 +59,17 @@ const ORANGE = '#ed8936';
 const GREY = '#718096';
 const LIGHT_GREY = '#f4f6f9';
 const WHITE = '#ffffff';
+const BLUE = '#3182ce';
+const PURPLE = '#9f7aea';
+
+function priorityActionColour(action) {
+  switch (action) {
+    case 'DO FIRST': return GREEN;
+    case 'PLAN': return BLUE;
+    case 'NICE TO HAVE': return YELLOW;
+    default: return GREY;
+  }
+}
 
 function scoreColour(s) { return s >= 80 ? GREEN : s >= 50 ? YELLOW : RED; }
 function scoreLabel(s) { return s >= 80 ? 'Good' : s >= 50 ? 'Needs Work' : 'Poor'; }
@@ -129,6 +140,9 @@ function buildDocDefinition(audit, opts) {
 
       // Score benchmark interpretations
       ...scoreInterpretationBlocks(insights.scoreInterpretations),
+
+      // Revenue Opportunity Summary
+      ...revenueOpportunitySummaryBlocks(insights.revenueOpportunitySummary),
 
       // Top Fixes section with how-to-fix guidance
       ...topFixesBlocks(insights.topFixes, insights.detectedPlatform),
@@ -311,19 +325,35 @@ function topFixesBlocks(fixes, platform) {
   for (let i = 0; i < fixes.length; i++) {
     const fix = fixes[i];
     const htf = fix.howToFix;
+    const priorityAction = fix.priorityAction || 'PLAN';
+    const responsibility = fix.responsibility || 'Dev';
+    const bi = fix.businessImpact;
 
     // Fix header row
     const fixStack = [
       { text: fix.title, fontSize: 9, bold: true, color: NAVY },
-      { text: fix.why, fontSize: 7.5, color: GREY, margin: [0, 2, 0, 0] },
       {
         columns: [
-          { text: `${fix.category}`, fontSize: 6.5, color: GREY, width: 'auto' },
+          { text: priorityAction, fontSize: 6.5, bold: true, color: priorityActionColour(priorityAction), width: 'auto' },
           { text: `Effort: ${fix.effort}`, fontSize: 6.5, color: GREY, width: 'auto', margin: [8, 0, 0, 0] },
+          { text: `Owner: ${responsibility}`, fontSize: 6.5, color: GREY, width: 'auto', margin: [8, 0, 0, 0] },
         ],
-        margin: [0, 4, 0, 0],
+        margin: [0, 3, 0, 0],
       },
     ];
+
+    // Business impact summary
+    if (bi && bi.summary) {
+      fixStack.push({ text: bi.summary, fontSize: 7.5, bold: true, color: GREEN, margin: [0, 2, 0, 0] });
+    }
+
+    fixStack.push({ text: fix.why, fontSize: 7.5, color: GREY, margin: [0, 2, 0, 0] });
+    fixStack.push({
+      columns: [
+        { text: `${fix.category}`, fontSize: 6.5, color: GREY, width: 'auto' },
+      ],
+      margin: [0, 2, 0, 0],
+    });
 
     // Add how-to-fix steps
     if (htf && htf.steps) {
@@ -363,8 +393,8 @@ function topFixesBlocks(fixes, platform) {
           {
             margin: [4, 4, 4, 4],
             stack: [
-              { text: `#${i + 1}`, fontSize: 10, bold: true, color: severityColour(fix.severity) },
-              { text: fix.impact.toUpperCase(), fontSize: 6, bold: true, color: severityColour(fix.severity), margin: [0, 2, 0, 0] },
+              { text: `#${i + 1}`, fontSize: 10, bold: true, color: priorityActionColour(priorityAction) },
+              { text: priorityAction, fontSize: 5.5, bold: true, color: priorityActionColour(priorityAction), margin: [0, 2, 0, 0] },
             ],
             alignment: 'center',
           },
@@ -387,6 +417,45 @@ function topFixesBlocks(fixes, platform) {
   blocks.push({ text: '', margin: [0, 0, 0, 8] });
 
   return blocks;
+}
+
+function revenueOpportunitySummaryBlocks(summary) {
+  if (!summary) return [];
+
+  return [
+    {
+      table: {
+        widths: ['*'],
+        body: [[{
+          fillColor: '#0d4f3c',
+          margin: [12, 10, 12, 10],
+          stack: [
+            { text: 'Estimated Impact if All Issues Fixed', fontSize: 12, bold: true, color: WHITE },
+            { text: summary.headline, fontSize: 9, bold: true, color: '#68d391', margin: [0, 6, 0, 0] },
+          ],
+        }]],
+      },
+      layout: { hLineWidth: () => 0, vLineWidth: () => 0 },
+      margin: [0, 8, 0, 4],
+    },
+    {
+      columns: [
+        { text: `+${(summary.totalTrafficGain || 0).toLocaleString()}\nMonthly Traffic Gain`, fontSize: 8, alignment: 'center', color: GREEN, bold: true },
+        { text: `$${(summary.totalMonthlyValue || 0).toLocaleString()}/mo\nEstimated Monthly Value`, fontSize: 8, alignment: 'center', color: GREEN, bold: true },
+        { text: `$${(summary.totalAnnualValue || 0).toLocaleString()}/yr\nEstimated Annual Value`, fontSize: 8, alignment: 'center', color: GREEN, bold: true },
+      ],
+      margin: [0, 0, 0, 4],
+    },
+    {
+      columns: [
+        { text: `${summary.doFirstCount || 0} Do First`, fontSize: 7.5, alignment: 'center', color: GREEN, bold: true },
+        { text: `${summary.planCount || 0} Plan`, fontSize: 7.5, alignment: 'center', color: BLUE, bold: true },
+        { text: `${summary.niceToHaveCount || 0} Nice to Have`, fontSize: 7.5, alignment: 'center', color: YELLOW, bold: true },
+        { text: `${summary.ignoreCount || 0} Ignore`, fontSize: 7.5, alignment: 'center', color: GREY, bold: true },
+      ],
+      margin: [0, 0, 0, 12],
+    },
+  ];
 }
 
 function sectionHeader(title) {

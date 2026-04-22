@@ -126,7 +126,33 @@ function generateHtml(audit, extras) {
     .roi-rec p { font-size: 0.8rem; color: #cbd5e0; line-height: 1.4; }
     .roi-rec .roi-value { font-weight: 700; color: #68d391; }
     .difficulty-easy { color: #68d391; } .difficulty-moderate { color: #ecc94b; } .difficulty-challenging { color: #ed8936; } .difficulty-hard { color: #fc8181; }
-    @media (max-width: 600px) { .meta-grid { grid-template-columns: 1fr; } .comp-table { font-size: 0.72rem; } .comp-table th, .comp-table td { padding: 6px 8px; } .kw-table { font-size: 0.72rem; } .roi-summary-grid { grid-template-columns: 1fr 1fr; } }
+    .revenue-summary { background: linear-gradient(135deg, #0d4f3c 0%, #1a3a2e 100%); border-radius: 12px; padding: 24px; margin-bottom: 24px; color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+    .revenue-summary h2 { color: #fff; font-size: 1.1rem; margin-bottom: 12px; }
+    .revenue-headline { font-size: 1rem; font-weight: 700; color: #68d391; line-height: 1.5; margin-bottom: 16px; }
+    .revenue-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .revenue-stat { background: rgba(255,255,255,0.1); border-radius: 8px; padding: 14px; text-align: center; }
+    .revenue-stat-value { font-size: 1.6rem; font-weight: 800; color: #68d391; }
+    .revenue-stat-label { font-size: 0.7rem; color: #a0aec0; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+    .priority-matrix { display: flex; gap: 10px; flex-wrap: wrap; }
+    .matrix-item { background: rgba(255,255,255,0.08); border-radius: 8px; padding: 10px 16px; text-align: center; flex: 1; min-width: 120px; }
+    .matrix-count { font-size: 1.4rem; font-weight: 800; }
+    .matrix-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+    .matrix-do-first .matrix-count { color: #68d391; }
+    .matrix-plan .matrix-count { color: #63b3ed; }
+    .matrix-nice .matrix-count { color: #ecc94b; }
+    .matrix-ignore .matrix-count { color: #a0aec0; }
+    .priority-tag { display: inline-block; font-size: 0.62rem; font-weight: 700; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .priority-do-first { background: #38a169; color: #fff; }
+    .priority-plan { background: #3182ce; color: #fff; }
+    .priority-nice-to-have { background: #d69e2e; color: #fff; }
+    .priority-ignore-for-now { background: #718096; color: #fff; }
+    .responsibility-tag { display: inline-block; font-size: 0.62rem; font-weight: 700; padding: 2px 8px; border-radius: 4px; margin-left: 4px; letter-spacing: 0.3px; }
+    .resp-dev { background: rgba(99,179,237,0.2); color: #63b3ed; }
+    .resp-marketing { background: rgba(237,137,54,0.2); color: #ed8936; }
+    .resp-hosting { background: rgba(159,122,234,0.2); color: #9f7aea; }
+    .resp-designer { background: rgba(236,201,75,0.2); color: #ecc94b; }
+    .fix-business-impact { font-size: 0.82rem; color: #68d391; margin-top: 6px; font-weight: 600; line-height: 1.4; }
+    @media (max-width: 600px) { .meta-grid { grid-template-columns: 1fr; } .comp-table { font-size: 0.72rem; } .comp-table th, .comp-table td { padding: 6px 8px; } .kw-table { font-size: 0.72rem; } .roi-summary-grid { grid-template-columns: 1fr 1fr; } .revenue-stats { grid-template-columns: 1fr 1fr; } .priority-matrix { flex-direction: column; } }
   </style>
 </head>
 <body>
@@ -146,6 +172,9 @@ function generateHtml(audit, extras) {
     ${scoreCard('Performance', scores.performance, insights.scoreInterpretations.performance)}
     ${scoreCard('Accessibility', scores.accessibility, insights.scoreInterpretations.accessibility)}
   </div>
+
+  <!-- Revenue Opportunity Summary -->
+  ${revenueOpportunitySummarySection(insights.revenueOpportunitySummary)}
 
   <!-- Top Fixes with How-to-Fix Guidance -->
   ${topFixesSection(insights.topFixes, insights.detectedPlatform)}
@@ -261,8 +290,21 @@ function topFixesSection(fixes, platform) {
     : '';
 
   const items = fixes.map((fix, i) => {
-    const borderClass = `fix-${fix.severity}`;
+    const priorityAction = fix.priorityAction || 'PLAN';
+    const priorityClass = `priority-${priorityAction.toLowerCase().replace(/ /g, '-')}`;
+    const borderClass = priorityAction === 'DO FIRST' ? 'fix-critical'
+      : priorityAction === 'PLAN' ? 'fix-high'
+      : priorityAction === 'NICE TO HAVE' ? 'fix-medium'
+      : 'fix-low';
     const htf = fix.howToFix;
+    const responsibility = fix.responsibility || 'Dev';
+    const respClass = `resp-${responsibility.toLowerCase()}`;
+    const bi = fix.businessImpact;
+
+    let businessImpactHtml = '';
+    if (bi && bi.summary) {
+      businessImpactHtml = `<div class="fix-business-impact">${escHtml(bi.summary)}</div>`;
+    }
 
     let howToFixHtml = '';
     if (htf) {
@@ -288,10 +330,12 @@ function topFixesSection(fixes, platform) {
       <div class="fix-header">
         <span class="fix-title">#${i + 1} ${escHtml(fix.title)}</span>
         <div class="fix-meta">
-          <span class="severity-tag severity-${fix.severity}">${fix.impact}</span>
+          <span class="priority-tag ${priorityClass}">${escHtml(priorityAction)}</span>
           <span class="effort-tag">${escHtml(fix.effort)}</span>
+          <span class="responsibility-tag ${respClass}">${escHtml(responsibility)}</span>
         </div>
       </div>
+      ${businessImpactHtml}
       <div class="fix-why">${escHtml(fix.why)}</div>
       <div class="fix-category">${escHtml(fix.category)}</div>
       ${howToFixHtml}
@@ -301,6 +345,26 @@ function topFixesSection(fixes, platform) {
   return `<div class="top-fixes">
     <h2>🎯 Top ${fixes.length} Fixes — What to Do First ${platformBadge}</h2>
     ${items}
+  </div>`;
+}
+
+function revenueOpportunitySummarySection(summary) {
+  if (!summary) return '';
+
+  return `<div class="revenue-summary">
+    <h2>💰 Estimated Impact if All Issues Fixed</h2>
+    <div class="revenue-headline">${escHtml(summary.headline)}</div>
+    <div class="revenue-stats">
+      <div class="revenue-stat"><div class="revenue-stat-value">+${(summary.totalTrafficGain || 0).toLocaleString()}</div><div class="revenue-stat-label">Monthly Traffic Gain</div></div>
+      <div class="revenue-stat"><div class="revenue-stat-value">$${(summary.totalMonthlyValue || 0).toLocaleString()}/mo</div><div class="revenue-stat-label">Estimated Monthly Value</div></div>
+      <div class="revenue-stat"><div class="revenue-stat-value">$${(summary.totalAnnualValue || 0).toLocaleString()}/yr</div><div class="revenue-stat-label">Estimated Annual Value</div></div>
+    </div>
+    <div class="priority-matrix">
+      <div class="matrix-item matrix-do-first"><div class="matrix-count">${summary.doFirstCount || 0}</div><div class="matrix-label">Do First</div></div>
+      <div class="matrix-item matrix-plan"><div class="matrix-count">${summary.planCount || 0}</div><div class="matrix-label">Plan</div></div>
+      <div class="matrix-item matrix-nice"><div class="matrix-count">${summary.niceToHaveCount || 0}</div><div class="matrix-label">Nice to Have</div></div>
+      <div class="matrix-item matrix-ignore"><div class="matrix-count">${summary.ignoreCount || 0}</div><div class="matrix-label">Ignore for Now</div></div>
+    </div>
   </div>`;
 }
 

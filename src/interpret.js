@@ -11,6 +11,96 @@
 
 const SEVERITY = { CRITICAL: 'critical', HIGH: 'high', MEDIUM: 'medium', LOW: 'low' };
 
+// ── Responsibility mapping ──────────────────────────────────────────────────
+// Maps issue patterns to who should fix them: Dev, Designer, Marketing, Hosting
+
+const RESPONSIBILITY_MAP = {
+  'noindex directive': 'Dev',
+  'Missing viewport meta': 'Dev',
+  'HTTP error status': 'Dev',
+  'Title missing or too long': 'Marketing',
+  'Meta description missing or out of 50–160 range': 'Marketing',
+  'Page should have exactly one H1': 'Marketing',
+  'No canonical URL defined': 'Dev',
+  'Missing lang attribute on <html>': 'Dev',
+  'Missing og:title': 'Marketing',
+  'Missing og:image': 'Marketing',
+  'No JSON-LD structured data found': 'Dev',
+  'HTML payload too large': 'Dev',
+  'Slow time-to-first-byte': 'Hosting',
+  'render-blocking <script>': 'Dev',
+  'stylesheets may block rendering': 'Dev',
+  'image(s) missing srcset or loading="lazy"': 'Dev',
+  'Response not compressed': 'Hosting',
+  'image(s) missing alt attribute': 'Marketing',
+  'form input(s) missing label or aria-label': 'Dev',
+  'Heading levels are skipped': 'Marketing',
+  'No skip-navigation link detected': 'Dev',
+  'No <main> landmark': 'Dev',
+  'Missing lang attribute — screen readers cannot select voice': 'Dev',
+  'button(s) have no visible or accessible name': 'Dev',
+};
+
+function getResponsibility(issueText) {
+  for (const [pattern, owner] of Object.entries(RESPONSIBILITY_MAP)) {
+    if (issueText.includes(pattern)) return owner;
+  }
+  return 'Dev';
+}
+
+// ── Priority matrix (effort-vs-impact) ──────────────────────────────────────
+// Replaces technical severity with actionable priority labels
+
+function getPriorityAction(impactScore, effortScore) {
+  const highImpact = impactScore >= 7;
+  const lowEffort = effortScore <= 1;
+
+  if (highImpact && lowEffort) return 'DO FIRST';
+  if (highImpact && !lowEffort) return 'PLAN';
+  if (!highImpact && lowEffort) return 'NICE TO HAVE';
+  return 'IGNORE FOR NOW';
+}
+
+// ── Business impact estimation ──────────────────────────────────────────────
+// Converts technical issues into revenue-impact estimates
+
+const DEFAULT_MONTHLY_TRAFFIC = 500;
+const DEFAULT_CONVERSION_RATE = 0.025;
+const DEFAULT_AVG_VALUE = 100;
+
+function computeBusinessImpact(trafficImpact, effortScore) {
+  const trafficGain = Math.round(DEFAULT_MONTHLY_TRAFFIC * (trafficImpact / 100));
+  const conversions = trafficGain * DEFAULT_CONVERSION_RATE;
+  const monthlyValue = Math.round(conversions * DEFAULT_AVG_VALUE);
+  const annualValue = monthlyValue * 12;
+  const speedImpactSec = trafficImpact >= 40 ? 1.5 : trafficImpact >= 20 ? 0.5 : 0;
+  const conversionLoss = speedImpactSec > 0 ? Math.round(speedImpactSec * 7) : 0;
+
+  return {
+    trafficGain,
+    monthlyValue,
+    annualValue,
+    conversionLoss,
+    summary: buildBusinessSummary(trafficGain, monthlyValue, annualValue, conversionLoss, effortScore),
+  };
+}
+
+function buildBusinessSummary(trafficGain, monthlyValue, annualValue, conversionLoss, effortScore) {
+  const parts = [];
+  if (conversionLoss > 0) {
+    parts.push(`A 1-second delay can reduce conversions by ~7%.`);
+  }
+  if (trafficGain > 0) {
+    parts.push(`Fixing this could recover ~${trafficGain} monthly visits`);
+  }
+  if (monthlyValue > 0) {
+    parts.push(`worth ~$${monthlyValue.toLocaleString()}/mo ($${annualValue.toLocaleString()}/yr)`);
+  }
+  const effortLabel = effortScore <= 1 ? '< 1 hour' : effortScore <= 2 ? '1–4 hours' : '4+ hours';
+  parts.push(`estimated effort: ${effortLabel}`);
+  return parts.join(', ') + '.';
+}
+
 // ── Score benchmarks (based on HTTPArchive / CrUX public data) ───────────────
 
 const BENCHMARKS = {
@@ -622,6 +712,12 @@ function buildTopFixes(audit, maxFixes, platform) {
         };
       }
 
+      const impactScore = detail ? detail.impact : severityToScore(severity) / 3;
+      const effortScoreRaw = detail ? detail.effort : 2;
+      const priorityAction = getPriorityAction(impactScore, effortScoreRaw);
+      const responsibility = getResponsibility(issue);
+      const businessImpact = computeBusinessImpact(trafficData.trafficImpact, effortScoreRaw);
+
       allIssues.push({
         category: cat.name,
         issue,
@@ -634,6 +730,9 @@ function buildTopFixes(audit, maxFixes, platform) {
         trafficImpact: trafficData.trafficImpact,
         trafficRationale: trafficData.rationale,
         howToFix,
+        priorityAction,
+        responsibility,
+        businessImpact,
       });
     }
   }
@@ -692,6 +791,31 @@ function enrichAudit(audit, extras) {
   const platform = audit.detectedPlatform || 'html';
   extras = extras || {};
 
+  const allFixes = buildTopFixes(audit, 999, platform);
+  const topFixes = allFixes.slice(0, 5);
+
+  // Revenue Opportunity Summary — aggregated from all fixes
+  const totalMonthlyValue = allFixes.reduce((s, f) => s + (f.businessImpact?.monthlyValue || 0), 0);
+  const totalAnnualValue = totalMonthlyValue * 12;
+  const totalTrafficGain = allFixes.reduce((s, f) => s + (f.businessImpact?.trafficGain || 0), 0);
+  const doFirstCount = allFixes.filter(f => f.priorityAction === 'DO FIRST').length;
+
+  const avgScore = Math.round((audit.scores.seo + audit.scores.performance + audit.scores.accessibility) / 3);
+  const speedBoost = avgScore < 60 ? '30–50%' : avgScore < 80 ? '15–30%' : '5–15%';
+  const seoBoost = audit.scores.seo < 60 ? '10–25%' : audit.scores.seo < 80 ? '5–12%' : '2–5%';
+  const conversionBoost = avgScore < 50 ? '8–15%' : avgScore < 70 ? '5–12%' : '2–5%';
+
+  const revenueOpportunitySummary = {
+    headline: `Estimated Impact if Fixed: +${speedBoost} faster load time, +${seoBoost} SEO visibility increase, +${conversionBoost} conversion improvement potential.`,
+    totalMonthlyValue,
+    totalAnnualValue,
+    totalTrafficGain,
+    doFirstCount,
+    planCount: allFixes.filter(f => f.priorityAction === 'PLAN').length,
+    niceToHaveCount: allFixes.filter(f => f.priorityAction === 'NICE TO HAVE').length,
+    ignoreCount: allFixes.filter(f => f.priorityAction === 'IGNORE FOR NOW').length,
+  };
+
   const result = {
     detectedPlatform: platform,
     scoreInterpretations: {
@@ -701,7 +825,9 @@ function enrichAudit(audit, extras) {
       accessibility: interpretScore('accessibility', audit.scores.accessibility),
     },
     metricInterpretations: interpretMetrics(audit),
-    topFixes: buildTopFixes(audit, 5, platform),
+    topFixes,
+    allFixes,
+    revenueOpportunitySummary,
     seoIssuesClassified: classifyAllIssues(audit.seo.issues),
     perfIssuesClassified: classifyAllIssues(audit.performance.issues),
     a11yIssuesClassified: classifyAllIssues(audit.accessibility.issues),
@@ -830,6 +956,9 @@ module.exports = {
   classifySeverity,
   classifyAllIssues,
   estimateTrafficImpact,
+  getResponsibility,
+  getPriorityAction,
+  computeBusinessImpact,
   SEVERITY,
   BENCHMARKS,
 };
