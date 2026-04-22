@@ -43,6 +43,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const IS_PRODUCTION = (process.env.APP_URL || '').startsWith('https');
 
+// Capture git commit at startup for deploy verification
+let BUILD_COMMIT = 'unknown';
+try {
+  BUILD_COMMIT = require('child_process').execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
+} catch (_) { /* not a git repo in production — fall back to unknown */ }
+
 /** Cookie options with secure flag in production */
 function cookieOpts(extra = {}) {
   const opts = { httpOnly: true, sameSite: 'lax', path: '/', ...extra };
@@ -249,6 +255,7 @@ app.get('/health', (_req, res) => {
   const payload = {
     status: allOk ? 'ok' : 'degraded',
     version: '1.0.0',
+    build: BUILD_COMMIT,
     uptime: Math.floor(process.uptime()),
     timestamp: new Date().toISOString(),
     checks,
