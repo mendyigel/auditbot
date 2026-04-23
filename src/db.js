@@ -635,6 +635,10 @@ function rowToRoadmap(row) {
 
 // ── Admin helpers ───────────────────────────────────────────────────────────
 
+function countAdmins() {
+  return db.prepare(`SELECT COUNT(*) as cnt FROM users WHERE is_admin = 1`).get().cnt;
+}
+
 function setAdmin(userId, isAdmin) {
   db.prepare(`UPDATE users SET is_admin = ? WHERE id = ?`).run(isAdmin ? 1 : 0, userId);
 }
@@ -788,6 +792,7 @@ module.exports = {
   getLatestRoadmapBySite,
   getRoadmapsByUser,
   // Admin
+  countAdmins,
   setAdmin,
   getAdminStats,
   getAllUsers,

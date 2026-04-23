@@ -2499,6 +2499,54 @@ app.get('/roadmap/latest/:siteId', requireActiveSubscription, requireProPlan, (r
   res.json(roadmap);
 });
 
+// ── First-time admin setup ──────────────────────────────────────────────────
+
+app.get('/setup', (req, res) => {
+  const adminCount = db.countAdmins();
+  if (adminCount > 0) {
+    return res.send(`<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Setup Complete — OrbioLabs</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#f1f5f9;display:flex;align-items:center;justify-content:center;min-height:100vh}.card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:48px 40px;max-width:480px;text-align:center}h1{font-size:1.5rem;margin-bottom:12px}p{color:#94a3b8;margin-bottom:24px}a{color:#3b82f6;text-decoration:none}a:hover{text-decoration:underline}</style>
+</head><body><div class="card"><h1>Setup Complete</h1><p>An admin account already exists. Use the admin panel to manage admins.</p><a href="/admin">Go to Admin Panel &rarr;</a></div></body></html>`);
+  }
+
+  const sessionToken = req.cookies && req.cookies.session;
+  const user = sessionToken ? db.getUserBySessionToken(sessionToken) : null;
+
+  if (!user) {
+    return res.send(`<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Setup — OrbioLabs</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#f1f5f9;display:flex;align-items:center;justify-content:center;min-height:100vh}.card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:48px 40px;max-width:480px;text-align:center}h1{font-size:1.5rem;margin-bottom:12px}p{color:#94a3b8;margin-bottom:24px}a{color:#3b82f6;text-decoration:none;font-weight:600}a:hover{text-decoration:underline}</style>
+</head><body><div class="card"><h1>First-Time Setup</h1><p>Sign in first, then return here to become the admin.</p><a href="/signin">Sign In &rarr;</a></div></body></html>`);
+  }
+
+  res.send(`<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Setup — OrbioLabs</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#f1f5f9;display:flex;align-items:center;justify-content:center;min-height:100vh}.card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:48px 40px;max-width:480px;text-align:center}h1{font-size:1.5rem;margin-bottom:12px}p{color:#94a3b8;margin-bottom:24px}.btn{display:inline-block;background:#3b82f6;color:#fff;font-size:1rem;font-weight:600;padding:12px 32px;border-radius:8px;border:none;cursor:pointer}.btn:hover{background:#2563eb}</style>
+</head><body><div class="card"><h1>First-Time Setup</h1><p>No admin exists yet. Click below to promote your account (<strong>${user.username}</strong>) to admin.</p>
+<form method="POST" action="/api/admin/promote"><button type="submit" class="btn">Become Admin</button></form>
+</div></body></html>`);
+});
+
+app.post('/api/admin/promote', (req, res) => {
+  const adminCount = db.countAdmins();
+  if (adminCount > 0) {
+    return res.status(403).json({ error: 'Admin already exists. Use the admin panel to manage admins.' });
+  }
+
+  const sessionToken = req.cookies && req.cookies.session;
+  const user = sessionToken ? db.getUserBySessionToken(sessionToken) : null;
+  if (!user) {
+    return res.status(401).json({ error: 'You must be signed in to use this endpoint.' });
+  }
+
+  db.setAdmin(user.id, true);
+  res.redirect('/admin');
+});
+
 // ── Admin panel ─────────────────────────────────────────────────────────────
 app.use('/admin', adminRouter);
 
