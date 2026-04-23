@@ -79,6 +79,7 @@ try { db.exec(`ALTER TABLE reports ADD COLUMN user_id TEXT`); } catch (_) {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_reports_user ON reports(user_id)`); } catch (_) {}
 try { db.exec(`ALTER TABLE users ADD COLUMN reset_token TEXT`); } catch (_) {}
 try { db.exec(`ALTER TABLE users ADD COLUMN reset_token_expires INTEGER`); } catch (_) {}
+try { db.exec(`ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
 
 // ── Tier 3: Monitoring + Roadmap tables ──────────────────────────────────────
 
@@ -632,6 +633,105 @@ function rowToRoadmap(row) {
   };
 }
 
+// ── Admin helpers ───────────────────────────────────────────────────────────
+
+function setAdmin(userId, isAdmin) {
+  db.prepare(`UPDATE users SET is_admin = ? WHERE id = ?`).run(isAdmin ? 1 : 0, userId);
+}
+
+function getAdminStats() {
+  const totalUsers = db.prepare(`SELECT COUNT(*) as cnt FROM users`).get().cnt;
+  const totalSubscribers = db.prepare(`SELECT COUNT(*) as cnt FROM subscriptions WHERE status IN ('active','trialing','cancelling')`).get().cnt;
+  const totalAudits = db.prepare(`SELECT COALESCE(SUM(audit_count),0) as cnt FROM subscriptions`).get().cnt;
+  const totalWaitlist = db.prepare(`SELECT COUNT(*) as cnt FROM waitlist`).get().cnt;
+  const totalMonitoredSites = db.prepare(`SELECT COUNT(*) as cnt FROM monitored_sites WHERE enabled = 1`).get().cnt;
+  const totalReports = db.prepare(`SELECT COUNT(*) as cnt FROM reports`).get().cnt;
+
+  // MRR calculation
+  const starterCount = db.prepare(`SELECT COUNT(*) as cnt FROM subscriptions WHERE status IN ('active','cancelling') AND plan_tier = 'starter'`).get().cnt;
+  const proCount = db.prepare(`SELECT COUNT(*) as cnt FROM subscriptions WHERE status IN ('active','cancelling') AND plan_tier = 'pro'`).get().cnt;
+  const trialingCount = db.prepare(`SELECT COUNT(*) as cnt FROM subscriptions WHERE status = 'trialing'`).get().cnt;
+  const mrr = (starterCount * 9) + (proCount * 29);
+
+  return { totalUsers, totalSubscribers, totalAudits, totalWaitlist, totalMonitoredSites, totalReports, starterCount, proCount, trialingCount, mrr };
+}
+
+function getAllUsers({ search, limit = 50, offset = 0 } = {}) {
+  let query = `SELECT u.*, s.status as sub_status, s.plan_tier, s.audit_count as total_audits, s.email as sub_email
+               FROM users u LEFT JOIN subscriptions s ON u.api_key = s.api_key`;
+  const params = [];
+  if (search) {
+    query += ` WHERE u.username LIKE ? OR u.email LIKE ? OR COALESCE(s.email, '') LIKE ?`;
+    const like = `%${search}%`;
+    params.push(like, like, like);
+  }
+  query += ` ORDER BY u.created_at DESC LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
+  return db.prepare(query).all(...params);
+}
+
+function getAllSubscriptions({ search, status, planTier, limit = 50, offset = 0 } = {}) {
+  let query = `SELECT s.*, u.username FROM subscriptions s LEFT JOIN users u ON u.api_key = s.api_key`;
+  const conditions = [];
+  const params = [];
+  if (search) {
+    conditions.push(`(s.email LIKE ? OR COALESCE(u.username, '') LIKE ?)`);
+    const like = `%${search}%`;
+    params.push(like, like);
+  }
+  if (status) {
+    conditions.push(`s.status = ?`);
+    params.push(status);
+  }
+  if (planTier) {
+    conditions.push(`s.plan_tier = ?`);
+    params.push(planTier);
+  }
+  if (conditions.length) query += ` WHERE ` + conditions.join(' AND ');
+  query += ` ORDER BY s.created_at DESC LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
+  return db.prepare(query).all(...params);
+}
+
+function updateSubscriptionFields(apiKey, fields) {
+  const allowed = ['status', 'plan_tier', 'audit_count', 'monthly_audit_count'];
+  const sets = [];
+  const params = [];
+  for (const [k, v] of Object.entries(fields)) {
+    if (allowed.includes(k)) { sets.push(`${k} = ?`); params.push(v); }
+  }
+  if (!sets.length) return;
+  params.push(apiKey);
+  db.prepare(`UPDATE subscriptions SET ${sets.join(', ')} WHERE api_key = ?`).run(...params);
+}
+
+function getTimeSeriesSignups(days = 30) {
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  return db.prepare(`
+    SELECT CAST(created_at / 86400000 AS INTEGER) as day_bucket, COUNT(*) as cnt
+    FROM users WHERE created_at >= ? GROUP BY day_bucket ORDER BY day_bucket ASC
+  `).all(cutoff);
+}
+
+function getTimeSeriesAudits(days = 30) {
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  return db.prepare(`
+    SELECT CAST(created_at / 86400000 AS INTEGER) as day_bucket, COUNT(*) as cnt
+    FROM reports WHERE created_at >= ? GROUP BY day_bucket ORDER BY day_bucket ASC
+  `).all(cutoff);
+}
+
+function getTimeSeriesRevenue(days = 30) {
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  return db.prepare(`
+    SELECT CAST(created_at / 86400000 AS INTEGER) as day_bucket,
+           SUM(CASE WHEN plan_tier = 'starter' THEN 9 ELSE 29 END) as revenue,
+           COUNT(*) as cnt
+    FROM subscriptions WHERE created_at >= ? AND status IN ('active','trialing','cancelling')
+    GROUP BY day_bucket ORDER BY day_bucket ASC
+  `).all(cutoff);
+}
+
 /** Cheap liveness check — throws if the DB connection is broken. */
 function ping() {
   db.prepare('SELECT 1').get();
@@ -687,4 +787,13 @@ module.exports = {
   getRoadmap,
   getLatestRoadmapBySite,
   getRoadmapsByUser,
+  // Admin
+  setAdmin,
+  getAdminStats,
+  getAllUsers,
+  getAllSubscriptions,
+  updateSubscriptionFields,
+  getTimeSeriesSignups,
+  getTimeSeriesAudits,
+  getTimeSeriesRevenue,
 };

@@ -38,6 +38,7 @@ const { mapKeywordOpportunities } = require('./keywords');
 const { analyzeContentGaps } = require('./content-gap');
 const { frameRoi } = require('./roi');
 const { startScheduler, MAX_SITES_PER_USER } = require('./monitor');
+const adminRouter = require('./admin');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -2507,6 +2508,9 @@ app.get('/roadmap/latest/:siteId', requireActiveSubscription, requireProPlan, (r
   }
   res.json(roadmap);
 });
+
+// ── Admin panel ─────────────────────────────────────────────────────────────
+app.use('/admin', adminRouter);
 
 // ── Sentry error handler (must be after all routes, before other error handlers)
 if (process.env.SENTRY_DSN) {
