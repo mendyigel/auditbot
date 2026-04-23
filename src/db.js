@@ -14,7 +14,11 @@ const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'auditbot.db');
+// Prefer explicit DB_PATH env var, then Render persistent disk, then local fallback
+const DB_PATH = process.env.DB_PATH
+  || (fs.existsSync('/app/data') ? '/app/data/auditbot.db' : path.join(__dirname, '..', 'data', 'auditbot.db'));
+
+console.log(`[DB] Using database path: ${DB_PATH}`);
 
 // Ensure the data directory exists
 const dataDir = path.dirname(DB_PATH);
