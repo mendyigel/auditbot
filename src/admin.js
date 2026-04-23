@@ -10,6 +10,7 @@
 const express = require('express');
 const db = require('./db');
 const bcrypt = require('bcryptjs');
+const emailService = require('./email');
 
 const router = express.Router();
 
@@ -580,6 +581,18 @@ router.get('/api/charts', (req, res) => {
     revenue: fillSeries(revenueRaw, 'revenue'),
     plans: { starter: stats.starterCount, pro: stats.proCount, trialing: stats.trialingCount },
   });
+});
+
+/**
+ * POST /admin/test-email
+ * Sends a test email and returns the raw Resend API response for diagnostics.
+ * Body: { "to": "recipient@example.com" }
+ */
+router.post('/test-email', async (req, res) => {
+  const { to } = req.body || {};
+  if (!to) return res.status(400).json({ error: 'Missing "to" field' });
+  const result = await emailService.sendTest(to);
+  res.json({ emailConfig: emailService.getStatus(), result });
 });
 
 module.exports = router;

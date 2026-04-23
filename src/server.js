@@ -265,17 +265,6 @@ app.get('/health', (_req, res) => {
   res.status(allOk ? 200 : 503).json(payload);
 });
 
-/**
- * POST /admin/test-email
- * Sends a test email and returns the raw Resend API response for diagnostics.
- * Body: { "to": "recipient@example.com" }
- */
-app.post('/admin/test-email', async (req, res) => {
-  const { to } = req.body || {};
-  if (!to) return res.status(400).json({ error: 'Missing "to" field' });
-  const result = await emailService.sendTest(to);
-  res.json({ emailConfig: emailService.getStatus(), result });
-});
 
 // ── Auth style shared between sign-in and sign-up ────────────────────────────
 
