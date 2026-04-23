@@ -72,6 +72,7 @@ const REPORT_TTL_MS = (parseInt(process.env.REPORT_TTL_DAYS, 10) || 30) * 24 * 6
 // Stripe webhooks require raw body — mount before express.json()
 app.use('/billing/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
 // Prune old report metadata (and orphaned files) daily
