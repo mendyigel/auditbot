@@ -1415,6 +1415,77 @@ app.get('/api/my-reports', (req, res) => {
   return res.json({ reports });
 });
 
+// ── Privacy ───────────────────────────────────────────────────────────────────
+
+/**
+ * GET /privacy
+ * Privacy policy page — linked from the site footer, email templates, and consent banner.
+ */
+app.get('/privacy', (_req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacy Policy — OrbioLabs</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 720px; margin: 0 auto; padding: 40px 24px; color: #1e293b; line-height: 1.7; }
+  h1 { font-size: 1.75rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.25rem; margin-top: 2rem; }
+  .updated { color: #64748b; font-size: .875rem; margin-bottom: 2rem; }
+  a { color: #3b82f6; }
+  footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #e2e8f0; font-size: .875rem; color: #64748b; }
+</style>
+</head>
+<body>
+<h1>Privacy Policy</h1>
+<p class="updated">Last updated: April 2026</p>
+
+<h2>1. What We Collect</h2>
+<p>When you use AuditBot (operated by Orbio Labs), we collect:</p>
+<ul>
+  <li><strong>Account information</strong> — email address and hashed password when you sign up.</li>
+  <li><strong>Audit data</strong> — the URLs you submit for auditing and the resulting reports.</li>
+  <li><strong>Usage analytics</strong> — anonymous page-view and event data to improve the service (see Section 4).</li>
+  <li><strong>Payment information</strong> — handled entirely by Stripe. We never store card numbers.</li>
+</ul>
+
+<h2>2. How We Use Your Data</h2>
+<ul>
+  <li>To provide, maintain, and improve the auditing service.</li>
+  <li>To send transactional emails (report delivery, account alerts).</li>
+  <li>To process payments and manage subscriptions via Stripe.</li>
+</ul>
+
+<h2>3. Data Sharing</h2>
+<p>We do not sell your personal data. We share data only with:</p>
+<ul>
+  <li><strong>Stripe</strong> — for payment processing.</li>
+  <li><strong>Infrastructure providers</strong> — hosting and storage necessary to run the service.</li>
+</ul>
+
+<h2>4. Cookies &amp; Analytics</h2>
+<p>We use a lightweight analytics snippet to collect anonymous usage data. You can manage your preferences via the consent banner shown on your first visit.</p>
+
+<h2>5. Data Retention</h2>
+<p>Audit reports are retained for the lifetime of your account. If you delete your account, associated data is removed within 30 days.</p>
+
+<h2>6. Your Rights</h2>
+<p>You may request access to, correction of, or deletion of your personal data at any time by emailing <a href="mailto:hello@orbiolab.com">hello@orbiolab.com</a>.</p>
+
+<h2>7. Contact</h2>
+<p>Questions about this policy? Reach us at <a href="mailto:hello@orbiolab.com">hello@orbiolab.com</a>.</p>
+
+<footer>
+  <p>&copy; 2026 Orbio Labs &mdash; <a href="/">Home</a></p>
+</footer>
+${appPageAnalyticsSnippet('privacy')}
+${consentBannerSnippet()}
+</body>
+</html>`);
+});
+
 // ── Billing routes ────────────────────────────────────────────────────────────
 
 /**
@@ -1473,6 +1544,41 @@ app.post('/billing/checkout', async (req, res) => {
   } catch (err) {
     console.error('[billing/checkout error]', err);
     return res.status(500).json({ error: 'Could not create checkout session', detail: err.message });
+  }
+});
+
+/**
+ * GET /billing/trial
+ * Browser-friendly entry point for starting a free trial.
+ * Accepts optional ?tier=starter|pro (defaults to 'starter').
+ * Creates a Stripe Checkout trial session and redirects the browser to it.
+ */
+app.get('/billing/trial', async (req, res) => {
+  try {
+    const tier = req.query.tier === 'pro' ? 'pro' : 'starter';
+    const base = getBaseUrl(req);
+    const { url } = await createTrialCheckoutSession({
+      email: undefined,
+      tier,
+      successUrl: `${base}/billing/trial/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancelUrl:  `${base}/billing/cancel`,
+    });
+    return res.redirect(303, url);
+  } catch (err) {
+    console.error('[billing/trial GET error]', err.message, err.stack);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(500).send(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>OrbioLabs — Trial Error</title>
+<style>body{font-family:system-ui,sans-serif;max-width:600px;margin:80px auto;padding:0 24px;color:#111}</style>
+</head>
+<body>
+<h1>Trial unavailable</h1>
+<p>We couldn't start the trial process right now. Please try again in a few minutes.</p>
+<p><a href="/billing/trial">Retry</a> · <a href="/">Back to home</a></p>
+${appPageAnalyticsSnippet('billing/trial')}
+${consentBannerSnippet()}
+</body></html>`);
   }
 });
 
