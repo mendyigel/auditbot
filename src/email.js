@@ -357,7 +357,7 @@ async function sendMonitoringAlert({ type, siteUrl, category, oldScore, newScore
     return { skipped: true, reason: 'no_user_id' };
   }
 
-  const user = db.getUserById(userId);
+  const user = await db.getUserById(userId);
   if (!user || !user.email) {
     console.log(`[email] Monitoring alert (${type}): user ${userId} has no email — skipping`);
     return { skipped: true, reason: 'no_email' };

@@ -1,310 +1,247 @@
 'use strict';
 
 /**
- * SQLite persistence layer for AuditBot.
+ * PostgreSQL persistence layer for AuditBot.
  *
- * Stores:
- *   - reports: metadata + S3/local storage key for each audit report
- *   - subscriptions: Stripe billing data (replaces in-memory Maps in billing.js)
+ * Migrated from SQLite (better-sqlite3) to PostgreSQL (pg) for reliable
+ * persistence across Render deploys.
  *
- * DB file location: $DB_PATH or ./data/auditbot.db
+ * Connection: $DATABASE_URL (Render auto-injects for managed PG).
  */
 
-const path = require('path');
-const fs = require('fs');
-const Database = require('better-sqlite3');
+const { Pool } = require('pg');
 
-// Prefer explicit DB_PATH env var, then Render persistent disk, then local fallback
-const DB_PATH = process.env.DB_PATH
-  || (fs.existsSync('/app/data') ? '/app/data/auditbot.db' : path.join(__dirname, '..', 'data', 'auditbot.db'));
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+});
 
-console.log(`[DB] Using database path: ${DB_PATH}`);
+pool.on('error', (err) => {
+  console.error('[DB] Unexpected pool error:', err.message);
+});
 
-// Ensure the data directory exists
-const dataDir = path.dirname(DB_PATH);
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+// ── Schema bootstrap ────────────────────────────────────────────────────────
+
+async function migrate() {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS reports (
+        id          TEXT PRIMARY KEY,
+        url         TEXT NOT NULL,
+        storage_key TEXT NOT NULL,
+        audit_json  TEXT NOT NULL,
+        created_at  BIGINT NOT NULL,
+        user_id     TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at);
+      CREATE INDEX IF NOT EXISTS idx_reports_user ON reports(user_id);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        api_key             TEXT PRIMARY KEY,
+        email               TEXT NOT NULL,
+        customer_id         TEXT NOT NULL UNIQUE,
+        subscription_id     TEXT,
+        status              TEXT NOT NULL DEFAULT 'incomplete',
+        created_at          BIGINT NOT NULL,
+        audit_count         INTEGER NOT NULL DEFAULT 0,
+        emails_sent         TEXT NOT NULL DEFAULT '{}',
+        pdf_count           INTEGER NOT NULL DEFAULT 0,
+        plan_tier           TEXT NOT NULL DEFAULT 'pro',
+        monthly_audit_count INTEGER NOT NULL DEFAULT 0,
+        monthly_reset_at    BIGINT NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_subs_customer ON subscriptions(customer_id);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS waitlist (
+        email      TEXT PRIMARY KEY,
+        created_at BIGINT NOT NULL
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id                  TEXT PRIMARY KEY,
+        username            TEXT NOT NULL UNIQUE,
+        password_hash       TEXT NOT NULL,
+        email               TEXT,
+        api_key             TEXT REFERENCES subscriptions(api_key),
+        session_token       TEXT UNIQUE,
+        created_at          BIGINT NOT NULL,
+        reset_token         TEXT,
+        reset_token_expires BIGINT,
+        is_admin            INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_users_username ON users(LOWER(username));
+      CREATE INDEX IF NOT EXISTS idx_users_session ON users(session_token);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS monitored_sites (
+        id              TEXT PRIMARY KEY,
+        user_id         TEXT NOT NULL,
+        url             TEXT NOT NULL,
+        frequency       TEXT NOT NULL DEFAULT 'weekly',
+        next_run_at     BIGINT NOT NULL,
+        last_run_at     BIGINT,
+        competitor_urls TEXT NOT NULL DEFAULT '[]',
+        notify_on       TEXT NOT NULL DEFAULT '{"score_drop":true,"new_issues":true,"competitor_change":true}',
+        enabled         INTEGER NOT NULL DEFAULT 1,
+        created_at      BIGINT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_monitored_user ON monitored_sites(user_id, enabled);
+      CREATE INDEX IF NOT EXISTS idx_monitored_next_run ON monitored_sites(next_run_at, enabled);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS audit_snapshots (
+        id                  TEXT PRIMARY KEY,
+        monitored_site_id   TEXT NOT NULL,
+        report_id           TEXT,
+        seo_score           INTEGER NOT NULL DEFAULT 0,
+        performance_score   INTEGER NOT NULL DEFAULT 0,
+        accessibility_score INTEGER NOT NULL DEFAULT 0,
+        overall_score       INTEGER NOT NULL DEFAULT 0,
+        issues_json         TEXT NOT NULL DEFAULT '[]',
+        competitor_scores   TEXT NOT NULL DEFAULT '{}',
+        created_at          BIGINT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_snapshots_site_created ON audit_snapshots(monitored_site_id, created_at);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS roadmaps (
+        id                TEXT PRIMARY KEY,
+        user_id           TEXT NOT NULL,
+        monitored_site_id TEXT,
+        snapshot_id       TEXT,
+        roadmap_json      TEXT NOT NULL DEFAULT '{}',
+        roadmap_html      TEXT NOT NULL DEFAULT '',
+        vertical          TEXT,
+        created_at        BIGINT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_roadmaps_user ON roadmaps(user_id);
+      CREATE INDEX IF NOT EXISTS idx_roadmaps_site ON roadmaps(monitored_site_id);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS support_tickets (
+        id             TEXT PRIMARY KEY,
+        ticket_number  TEXT NOT NULL UNIQUE,
+        email          TEXT NOT NULL,
+        user_id        TEXT,
+        category       TEXT NOT NULL DEFAULT 'other',
+        subject        TEXT NOT NULL,
+        description    TEXT NOT NULL,
+        priority       TEXT NOT NULL DEFAULT 'medium',
+        status         TEXT NOT NULL DEFAULT 'new',
+        assignee       TEXT,
+        internal_notes TEXT NOT NULL DEFAULT '[]',
+        status_history TEXT NOT NULL DEFAULT '[]',
+        created_at     BIGINT NOT NULL,
+        updated_at     BIGINT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets(status);
+      CREATE INDEX IF NOT EXISTS idx_support_tickets_email ON support_tickets(email);
+      CREATE INDEX IF NOT EXISTS idx_support_tickets_created ON support_tickets(created_at);
+      CREATE INDEX IF NOT EXISTS idx_support_tickets_number ON support_tickets(ticket_number);
+    `);
+
+    await client.query('COMMIT');
+    console.log('[DB] PostgreSQL schema ready');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[DB] Migration failed:', err.message);
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
-const db = new Database(DB_PATH);
+// ── Reports API ─────────────────────────────────────────────────────────────
 
-// Enable WAL mode for better concurrent read performance
-db.pragma('journal_mode = WAL');
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS reports (
-    id          TEXT PRIMARY KEY,
-    url         TEXT NOT NULL,
-    storage_key TEXT NOT NULL,
-    audit_json  TEXT NOT NULL,
-    created_at  INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS subscriptions (
-    api_key         TEXT PRIMARY KEY,
-    email           TEXT NOT NULL,
-    customer_id     TEXT NOT NULL UNIQUE,
-    subscription_id TEXT,
-    status          TEXT NOT NULL DEFAULT 'incomplete',
-    created_at      INTEGER NOT NULL,
-    audit_count     INTEGER NOT NULL DEFAULT 0,
-    emails_sent     TEXT    NOT NULL DEFAULT '{}'
-  );
-
-  CREATE TABLE IF NOT EXISTS waitlist (
-    email      TEXT PRIMARY KEY,
-    created_at INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS users (
-    id            TEXT PRIMARY KEY,
-    username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    password_hash TEXT NOT NULL,
-    email         TEXT,
-    api_key       TEXT REFERENCES subscriptions(api_key),
-    session_token TEXT UNIQUE,
-    created_at    INTEGER NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at);
-  CREATE INDEX IF NOT EXISTS idx_subs_customer   ON subscriptions(customer_id);
-  CREATE INDEX IF NOT EXISTS idx_users_username   ON users(username COLLATE NOCASE);
-  CREATE INDEX IF NOT EXISTS idx_users_session    ON users(session_token);
-`);
-
-// Migrate: add columns if they don't exist (safe on first run after upgrade)
-try { db.exec(`ALTER TABLE subscriptions ADD COLUMN audit_count  INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
-try { db.exec(`ALTER TABLE subscriptions ADD COLUMN emails_sent  TEXT    NOT NULL DEFAULT '{}'`); } catch (_) {}
-try { db.exec(`ALTER TABLE subscriptions ADD COLUMN pdf_count    INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
-try { db.exec(`ALTER TABLE subscriptions ADD COLUMN plan_tier    TEXT    NOT NULL DEFAULT 'pro'`); } catch (_) {}
-try { db.exec(`ALTER TABLE subscriptions ADD COLUMN monthly_audit_count INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
-try { db.exec(`ALTER TABLE subscriptions ADD COLUMN monthly_reset_at    INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
-try { db.exec(`ALTER TABLE reports ADD COLUMN user_id TEXT`); } catch (_) {}
-try { db.exec(`CREATE INDEX IF NOT EXISTS idx_reports_user ON reports(user_id)`); } catch (_) {}
-try { db.exec(`ALTER TABLE users ADD COLUMN reset_token TEXT`); } catch (_) {}
-try { db.exec(`ALTER TABLE users ADD COLUMN reset_token_expires INTEGER`); } catch (_) {}
-try { db.exec(`ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
-
-// ── Tier 3: Monitoring + Roadmap tables ──────────────────────────────────────
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS monitored_sites (
-    id              TEXT PRIMARY KEY,
-    user_id         TEXT NOT NULL,
-    url             TEXT NOT NULL,
-    frequency       TEXT NOT NULL DEFAULT 'weekly',
-    next_run_at     INTEGER NOT NULL,
-    last_run_at     INTEGER,
-    competitor_urls TEXT NOT NULL DEFAULT '[]',
-    notify_on       TEXT NOT NULL DEFAULT '{"score_drop":true,"new_issues":true,"competitor_change":true}',
-    enabled         INTEGER NOT NULL DEFAULT 1,
-    created_at      INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS audit_snapshots (
-    id                TEXT PRIMARY KEY,
-    monitored_site_id TEXT NOT NULL,
-    report_id         TEXT,
-    seo_score         INTEGER NOT NULL DEFAULT 0,
-    performance_score INTEGER NOT NULL DEFAULT 0,
-    accessibility_score INTEGER NOT NULL DEFAULT 0,
-    overall_score     INTEGER NOT NULL DEFAULT 0,
-    issues_json       TEXT NOT NULL DEFAULT '[]',
-    competitor_scores TEXT NOT NULL DEFAULT '{}',
-    created_at        INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS roadmaps (
-    id                TEXT PRIMARY KEY,
-    user_id           TEXT NOT NULL,
-    monitored_site_id TEXT,
-    snapshot_id       TEXT,
-    roadmap_json      TEXT NOT NULL DEFAULT '{}',
-    roadmap_html      TEXT NOT NULL DEFAULT '',
-    vertical          TEXT,
-    created_at        INTEGER NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_snapshots_site_created ON audit_snapshots(monitored_site_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_monitored_user ON monitored_sites(user_id, enabled);
-  CREATE INDEX IF NOT EXISTS idx_monitored_next_run ON monitored_sites(next_run_at, enabled);
-  CREATE INDEX IF NOT EXISTS idx_roadmaps_user ON roadmaps(user_id);
-  CREATE INDEX IF NOT EXISTS idx_roadmaps_site ON roadmaps(monitored_site_id);
-`);
-
-// ── Support Tickets table ────────────────────────────────────────────────────
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS support_tickets (
-    id            TEXT PRIMARY KEY,
-    ticket_number TEXT NOT NULL UNIQUE,
-    email         TEXT NOT NULL,
-    user_id       TEXT,
-    category      TEXT NOT NULL DEFAULT 'other',
-    subject       TEXT NOT NULL,
-    description   TEXT NOT NULL,
-    priority      TEXT NOT NULL DEFAULT 'medium',
-    status        TEXT NOT NULL DEFAULT 'new',
-    assignee      TEXT,
-    internal_notes TEXT NOT NULL DEFAULT '[]',
-    status_history TEXT NOT NULL DEFAULT '[]',
-    created_at    INTEGER NOT NULL,
-    updated_at    INTEGER NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets(status);
-  CREATE INDEX IF NOT EXISTS idx_support_tickets_email ON support_tickets(email);
-  CREATE INDEX IF NOT EXISTS idx_support_tickets_created ON support_tickets(created_at);
-  CREATE INDEX IF NOT EXISTS idx_support_tickets_number ON support_tickets(ticket_number);
-`);
-
-// ── Report helpers ─────────────────────────────────────────────────────────────
-
-const stmts = {
-  insertReport: db.prepare(
+async function saveReportMeta({ id, url, storageKey, audit, userId = null }) {
+  await pool.query(
     `INSERT INTO reports (id, url, storage_key, audit_json, created_at, user_id)
-     VALUES (@id, @url, @storage_key, @audit_json, @created_at, @user_id)`
-  ),
-  getReport: db.prepare(`SELECT * FROM reports WHERE id = ?`),
-  deleteReport: db.prepare(`DELETE FROM reports WHERE id = ?`),
-  pruneReports: db.prepare(`DELETE FROM reports WHERE created_at < ?`),
-  getReportsByUser: db.prepare(`SELECT id, url, created_at FROM reports WHERE user_id = ? ORDER BY created_at DESC LIMIT 50`),
-
-  // Waitlist
-  insertWaitlist: db.prepare(
-    `INSERT OR IGNORE INTO waitlist (email, created_at) VALUES (?, ?)`
-  ),
-
-  // Subscriptions
-  upsertSubscription: db.prepare(`
-    INSERT INTO subscriptions (api_key, email, customer_id, subscription_id, status, created_at)
-    VALUES (@api_key, @email, @customer_id, @subscription_id, @status, @created_at)
-    ON CONFLICT(customer_id) DO UPDATE SET
-      email           = excluded.email,
-      subscription_id = COALESCE(excluded.subscription_id, subscriptions.subscription_id),
-      status          = excluded.status
-  `),
-  getSubByApiKey:    db.prepare(`SELECT * FROM subscriptions WHERE api_key = ?`),
-  getSubByCustomer:  db.prepare(`SELECT * FROM subscriptions WHERE customer_id = ?`),
-  updateSubStatus:   db.prepare(
-    `UPDATE subscriptions SET status = @status, subscription_id = COALESCE(@subscription_id, subscription_id)
-     WHERE customer_id = @customer_id`
-  ),
-  incrAuditCount: db.prepare(
-    `UPDATE subscriptions SET audit_count = audit_count + 1 WHERE api_key = ?`
-  ),
-  incrPdfCount: db.prepare(
-    `UPDATE subscriptions SET pdf_count = pdf_count + 1 WHERE api_key = ?`
-  ),
-  getSubsDueTrialEmail: db.prepare(
-    `SELECT * FROM subscriptions WHERE status IN ('active', 'trialing', 'incomplete') AND created_at < ?`
-  ),
-  updateEmailsSent: db.prepare(
-    `UPDATE subscriptions SET emails_sent = ? WHERE api_key = ?`
-  ),
-  updatePlanTier: db.prepare(
-    `UPDATE subscriptions SET plan_tier = ? WHERE customer_id = ?`
-  ),
-  resetMonthlyAudits: db.prepare(
-    `UPDATE subscriptions SET monthly_audit_count = 0, monthly_reset_at = ? WHERE api_key = ?`
-  ),
-  incrMonthlyAuditCount: db.prepare(
-    `UPDATE subscriptions SET monthly_audit_count = monthly_audit_count + 1 WHERE api_key = ?`
-  ),
-
-  // Users
-  insertUser: db.prepare(
-    `INSERT INTO users (id, username, password_hash, email, api_key, session_token, created_at)
-     VALUES (@id, @username, @password_hash, @email, @api_key, @session_token, @created_at)`
-  ),
-  getUserById: db.prepare(`SELECT * FROM users WHERE id = ?`),
-  getUserByUsername: db.prepare(`SELECT * FROM users WHERE username = ? COLLATE NOCASE`),
-  getUserBySessionToken: db.prepare(`SELECT * FROM users WHERE session_token = ?`),
-  updateUserSession: db.prepare(`UPDATE users SET session_token = ? WHERE id = ?`),
-  linkUserApiKey: db.prepare(`UPDATE users SET api_key = ? WHERE id = ?`),
-  getUserByEmail: db.prepare(`SELECT * FROM users WHERE email = ? COLLATE NOCASE`),
-  setResetToken: db.prepare(`UPDATE users SET reset_token = ?, reset_token_expires = ? WHERE id = ?`),
-  getUserByResetToken: db.prepare(`SELECT * FROM users WHERE reset_token = ?`),
-  updatePassword: db.prepare(`UPDATE users SET password_hash = ?, reset_token = NULL, reset_token_expires = NULL WHERE id = ?`),
-};
-
-// ── Reports API ────────────────────────────────────────────────────────────────
-
-function saveReportMeta({ id, url, storageKey, audit, userId = null }) {
-  stmts.insertReport.run({
-    id,
-    url,
-    storage_key: storageKey,
-    audit_json: JSON.stringify(audit),
-    created_at: Date.now(),
-    user_id: userId,
-  });
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [id, url, storageKey, JSON.stringify(audit), Date.now(), userId]
+  );
 }
 
-function getReportsByUser(userId) {
-  return stmts.getReportsByUser.all(userId).map(row => ({
-    id: row.id,
-    url: row.url,
-    createdAt: row.created_at,
-  }));
+async function getReportsByUser(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, url, created_at FROM reports WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
+    [userId]
+  );
+  return rows.map(row => ({ id: row.id, url: row.url, createdAt: Number(row.created_at) }));
 }
 
-function getReportMeta(id) {
-  const row = stmts.getReport.get(id);
-  if (!row) return null;
+async function getReportMeta(id) {
+  const { rows } = await pool.query(`SELECT * FROM reports WHERE id = $1`, [id]);
+  if (!rows[0]) return null;
+  const row = rows[0];
   return {
     id: row.id,
     url: row.url,
     storageKey: row.storage_key,
     audit: JSON.parse(row.audit_json),
-    createdAt: row.created_at,
+    createdAt: Number(row.created_at),
   };
 }
 
-function deleteReportMeta(id) {
-  stmts.deleteReport.run(id);
+async function deleteReportMeta(id) {
+  await pool.query(`DELETE FROM reports WHERE id = $1`, [id]);
 }
 
-/** Remove report metadata older than `maxAgeMs` milliseconds. */
-function pruneOldReports(maxAgeMs) {
+async function pruneOldReports(maxAgeMs) {
   const cutoff = Date.now() - maxAgeMs;
-  stmts.pruneReports.run(cutoff);
+  await pool.query(`DELETE FROM reports WHERE created_at < $1`, [cutoff]);
 }
 
-// ── Waitlist API ───────────────────────────────────────────────────────────────
+// ── Waitlist API ────────────────────────────────────────────────────────────
 
-/** Store an email in the waitlist. Silently ignores duplicate emails. */
-function saveWaitlistEmail(email) {
-  stmts.insertWaitlist.run(email, Date.now());
+async function saveWaitlistEmail(email) {
+  await pool.query(
+    `INSERT INTO waitlist (email, created_at) VALUES ($1, $2) ON CONFLICT (email) DO NOTHING`,
+    [email, Date.now()]
+  );
 }
 
-// ── Subscriptions API ──────────────────────────────────────────────────────────
+// ── Subscriptions API ───────────────────────────────────────────────────────
 
-function upsertSubscription({ apiKey, email, customerId, subscriptionId = null, status = 'incomplete' }) {
-  stmts.upsertSubscription.run({
-    api_key: apiKey,
-    email,
-    customer_id: customerId,
-    subscription_id: subscriptionId,
-    status,
-    created_at: Date.now(),
-  });
+async function upsertSubscription({ apiKey, email, customerId, subscriptionId = null, status = 'incomplete' }) {
+  await pool.query(`
+    INSERT INTO subscriptions (api_key, email, customer_id, subscription_id, status, created_at)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    ON CONFLICT (customer_id) DO UPDATE SET
+      email           = EXCLUDED.email,
+      subscription_id = COALESCE(EXCLUDED.subscription_id, subscriptions.subscription_id),
+      status          = EXCLUDED.status
+  `, [apiKey, email, customerId, subscriptionId, status, Date.now()]);
 }
 
-function getSubscriptionByApiKey(apiKey) {
-  const row = stmts.getSubByApiKey.get(apiKey);
-  if (!row) return null;
-  return rowToSub(row);
+async function getSubscriptionByApiKey(apiKey) {
+  const { rows } = await pool.query(`SELECT * FROM subscriptions WHERE api_key = $1`, [apiKey]);
+  return rows[0] ? rowToSub(rows[0]) : null;
 }
 
-function getSubscriptionByCustomerId(customerId) {
-  const row = stmts.getSubByCustomer.get(customerId);
-  if (!row) return null;
-  return rowToSub(row);
+async function getSubscriptionByCustomerId(customerId) {
+  const { rows } = await pool.query(`SELECT * FROM subscriptions WHERE customer_id = $1`, [customerId]);
+  return rows[0] ? rowToSub(rows[0]) : null;
 }
 
-function updateSubscriptionStatus({ customerId, status, subscriptionId = null }) {
-  stmts.updateSubStatus.run({ customer_id: customerId, status, subscription_id: subscriptionId });
+async function updateSubscriptionStatus({ customerId, status, subscriptionId = null }) {
+  await pool.query(
+    `UPDATE subscriptions SET status = $1, subscription_id = COALESCE($2, subscription_id)
+     WHERE customer_id = $3`,
+    [status, subscriptionId, customerId]
+  );
 }
 
 function rowToSub(row) {
@@ -314,174 +251,125 @@ function rowToSub(row) {
     customerId:        row.customer_id,
     subscriptionId:    row.subscription_id,
     status:            row.status,
-    createdAt:         row.created_at,
+    createdAt:         Number(row.created_at),
     auditCount:        row.audit_count || 0,
     pdfCount:          row.pdf_count || 0,
     emailsSent:        JSON.parse(row.emails_sent || '{}'),
     planTier:          row.plan_tier || 'pro',
     monthlyAuditCount: row.monthly_audit_count || 0,
-    monthlyResetAt:    row.monthly_reset_at || 0,
+    monthlyResetAt:    Number(row.monthly_reset_at) || 0,
   };
 }
 
-/** Increment audit count for a given API key. */
-function incrementAuditCount(apiKey) {
-  stmts.incrAuditCount.run(apiKey);
+async function incrementAuditCount(apiKey) {
+  await pool.query(`UPDATE subscriptions SET audit_count = audit_count + 1 WHERE api_key = $1`, [apiKey]);
 }
 
-/** Increment PDF export count for a given API key. */
-function incrementPdfCount(apiKey) {
-  stmts.incrPdfCount.run(apiKey);
+async function incrementPdfCount(apiKey) {
+  await pool.query(`UPDATE subscriptions SET pdf_count = pdf_count + 1 WHERE api_key = $1`, [apiKey]);
 }
 
-/**
- * Return subscriptions created before `beforeMs` that may need trial emails.
- * Caller filters by which emails have already been sent.
- */
-function getSubscriptionsForTrialEmails(beforeMs) {
-  return stmts.getSubsDueTrialEmail.all(beforeMs).map(rowToSub);
+async function getSubscriptionsForTrialEmails(beforeMs) {
+  const { rows } = await pool.query(
+    `SELECT * FROM subscriptions WHERE status IN ('active', 'trialing', 'incomplete') AND created_at < $1`,
+    [beforeMs]
+  );
+  return rows.map(rowToSub);
 }
 
-/** Mark one or more email keys as sent for a given API key. */
-function markEmailSent(apiKey, emailKey) {
-  const sub = stmts.getSubByApiKey.get(apiKey);
-  if (!sub) return;
-  const flags = JSON.parse(sub.emails_sent || '{}');
+async function markEmailSent(apiKey, emailKey) {
+  const { rows } = await pool.query(`SELECT emails_sent FROM subscriptions WHERE api_key = $1`, [apiKey]);
+  if (!rows[0]) return;
+  const flags = JSON.parse(rows[0].emails_sent || '{}');
   flags[emailKey] = Date.now();
-  stmts.updateEmailsSent.run(JSON.stringify(flags), apiKey);
+  await pool.query(`UPDATE subscriptions SET emails_sent = $1 WHERE api_key = $2`, [JSON.stringify(flags), apiKey]);
 }
 
-/** Update the plan tier for a customer. */
-function updatePlanTier(customerId, tier) {
-  stmts.updatePlanTier.run(tier, customerId);
+async function updatePlanTier(customerId, tier) {
+  await pool.query(`UPDATE subscriptions SET plan_tier = $1 WHERE customer_id = $2`, [tier, customerId]);
 }
 
-/** Increment monthly audit count, resetting if a new month has started. */
-function incrementMonthlyAuditCount(apiKey) {
-  const sub = stmts.getSubByApiKey.get(apiKey);
-  if (!sub) return;
+async function incrementMonthlyAuditCount(apiKey) {
+  const { rows } = await pool.query(`SELECT monthly_reset_at FROM subscriptions WHERE api_key = $1`, [apiKey]);
+  if (!rows[0]) return;
   const now = Date.now();
-  const resetAt = sub.monthly_reset_at || 0;
-  // Reset counter if more than 30 days since last reset
+  const resetAt = Number(rows[0].monthly_reset_at) || 0;
   if (now - resetAt > 30 * 24 * 60 * 60 * 1000) {
-    stmts.resetMonthlyAudits.run(now, apiKey);
+    await pool.query(`UPDATE subscriptions SET monthly_audit_count = 0, monthly_reset_at = $1 WHERE api_key = $2`, [now, apiKey]);
   }
-  stmts.incrMonthlyAuditCount.run(apiKey);
+  await pool.query(`UPDATE subscriptions SET monthly_audit_count = monthly_audit_count + 1 WHERE api_key = $1`, [apiKey]);
 }
 
-/** Get current monthly audit count, auto-resetting if needed. */
-function getMonthlyAuditCount(apiKey) {
-  const sub = stmts.getSubByApiKey.get(apiKey);
-  if (!sub) return 0;
+async function getMonthlyAuditCount(apiKey) {
+  const { rows } = await pool.query(`SELECT monthly_audit_count, monthly_reset_at FROM subscriptions WHERE api_key = $1`, [apiKey]);
+  if (!rows[0]) return 0;
   const now = Date.now();
-  const resetAt = sub.monthly_reset_at || 0;
+  const resetAt = Number(rows[0].monthly_reset_at) || 0;
   if (now - resetAt > 30 * 24 * 60 * 60 * 1000) {
-    stmts.resetMonthlyAudits.run(now, apiKey);
+    await pool.query(`UPDATE subscriptions SET monthly_audit_count = 0, monthly_reset_at = $1 WHERE api_key = $2`, [now, apiKey]);
     return 0;
   }
-  return sub.monthly_audit_count || 0;
+  return rows[0].monthly_audit_count || 0;
 }
 
-// ── Users API ─────────────────────────────────────────────────────────────────
+// ── Users API ───────────────────────────────────────────────────────────────
 
-function createUser({ id, username, passwordHash, email = null, apiKey = null, sessionToken = null }) {
-  stmts.insertUser.run({
-    id,
-    username,
-    password_hash: passwordHash,
-    email: email,
-    api_key: apiKey,
-    session_token: sessionToken,
-    created_at: Date.now(),
-  });
+async function createUser({ id, username, passwordHash, email = null, apiKey = null, sessionToken = null }) {
+  await pool.query(
+    `INSERT INTO users (id, username, password_hash, email, api_key, session_token, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [id, username, passwordHash, email, apiKey, sessionToken, Date.now()]
+  );
 }
 
-function getUserById(id) {
-  return stmts.getUserById.get(id) || null;
+async function getUserById(id) {
+  const { rows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [id]);
+  return rows[0] || null;
 }
 
-function getUserByUsername(username) {
-  return stmts.getUserByUsername.get(username) || null;
+async function getUserByUsername(username) {
+  const { rows } = await pool.query(`SELECT * FROM users WHERE LOWER(username) = LOWER($1)`, [username]);
+  return rows[0] || null;
 }
 
-function getUserBySessionToken(token) {
-  return stmts.getUserBySessionToken.get(token) || null;
+async function getUserBySessionToken(token) {
+  const { rows } = await pool.query(`SELECT * FROM users WHERE session_token = $1`, [token]);
+  return rows[0] || null;
 }
 
-function updateUserSession(userId, sessionToken) {
-  stmts.updateUserSession.run(sessionToken, userId);
+async function updateUserSession(userId, sessionToken) {
+  await pool.query(`UPDATE users SET session_token = $1 WHERE id = $2`, [sessionToken, userId]);
 }
 
-function linkUserApiKey(userId, apiKey) {
-  stmts.linkUserApiKey.run(apiKey, userId);
+async function linkUserApiKey(userId, apiKey) {
+  await pool.query(`UPDATE users SET api_key = $1 WHERE id = $2`, [apiKey, userId]);
 }
 
-function getUserByEmail(email) {
-  return stmts.getUserByEmail.get(email) || null;
+async function getUserByEmail(email) {
+  const { rows } = await pool.query(`SELECT * FROM users WHERE LOWER(email) = LOWER($1)`, [email]);
+  return rows[0] || null;
 }
 
-function setResetToken(userId, token, expiresAt) {
-  stmts.setResetToken.run(token, expiresAt, userId);
+async function setResetToken(userId, token, expiresAt) {
+  await pool.query(`UPDATE users SET reset_token = $1, reset_token_expires = $2 WHERE id = $3`, [token, expiresAt, userId]);
 }
 
-function getUserByResetToken(token) {
-  const user = stmts.getUserByResetToken.get(token);
+async function getUserByResetToken(token) {
+  const { rows } = await pool.query(`SELECT * FROM users WHERE reset_token = $1`, [token]);
+  const user = rows[0];
   if (!user) return null;
-  if (user.reset_token_expires && Date.now() > user.reset_token_expires) return null;
+  if (user.reset_token_expires && Date.now() > Number(user.reset_token_expires)) return null;
   return user;
 }
 
-function updatePassword(userId, passwordHash) {
-  stmts.updatePassword.run(passwordHash, userId);
+async function updatePassword(userId, passwordHash) {
+  await pool.query(
+    `UPDATE users SET password_hash = $1, reset_token = NULL, reset_token_expires = NULL WHERE id = $2`,
+    [passwordHash, userId]
+  );
 }
 
-// ── Monitored Sites API ──────────────────────────────────────────────────────
-
-const monitorStmts = {
-  insertSite: db.prepare(
-    `INSERT INTO monitored_sites (id, user_id, url, frequency, next_run_at, competitor_urls, notify_on, enabled, created_at)
-     VALUES (@id, @user_id, @url, @frequency, @next_run_at, @competitor_urls, @notify_on, @enabled, @created_at)`
-  ),
-  getSite: db.prepare(`SELECT * FROM monitored_sites WHERE id = ?`),
-  getSitesByUser: db.prepare(`SELECT * FROM monitored_sites WHERE user_id = ? ORDER BY created_at DESC`),
-  getEnabledSitesByUser: db.prepare(`SELECT * FROM monitored_sites WHERE user_id = ? AND enabled = 1 ORDER BY created_at DESC`),
-  updateSite: db.prepare(
-    `UPDATE monitored_sites SET frequency = @frequency, competitor_urls = @competitor_urls,
-     notify_on = @notify_on, enabled = @enabled, next_run_at = @next_run_at WHERE id = @id`
-  ),
-  deleteSite: db.prepare(`DELETE FROM monitored_sites WHERE id = ?`),
-  getDueSites: db.prepare(`SELECT * FROM monitored_sites WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at ASC LIMIT ?`),
-  updateNextRun: db.prepare(`UPDATE monitored_sites SET next_run_at = ?, last_run_at = ? WHERE id = ?`),
-  countUserSites: db.prepare(`SELECT COUNT(*) as cnt FROM monitored_sites WHERE user_id = ? AND enabled = 1`),
-
-  // Snapshots
-  insertSnapshot: db.prepare(
-    `INSERT INTO audit_snapshots (id, monitored_site_id, report_id, seo_score, performance_score, accessibility_score, overall_score, issues_json, competitor_scores, created_at)
-     VALUES (@id, @monitored_site_id, @report_id, @seo_score, @performance_score, @accessibility_score, @overall_score, @issues_json, @competitor_scores, @created_at)`
-  ),
-  getSnapshot: db.prepare(`SELECT * FROM audit_snapshots WHERE id = ?`),
-  getSnapshotsBySite: db.prepare(
-    `SELECT * FROM audit_snapshots WHERE monitored_site_id = ? ORDER BY created_at DESC LIMIT ?`
-  ),
-  getLatestSnapshot: db.prepare(
-    `SELECT * FROM audit_snapshots WHERE monitored_site_id = ? ORDER BY created_at DESC LIMIT 1`
-  ),
-  getTrendsBySite: db.prepare(
-    `SELECT seo_score, performance_score, accessibility_score, overall_score, created_at
-     FROM audit_snapshots WHERE monitored_site_id = ? ORDER BY created_at ASC`
-  ),
-
-  // Roadmaps
-  insertRoadmap: db.prepare(
-    `INSERT INTO roadmaps (id, user_id, monitored_site_id, snapshot_id, roadmap_json, roadmap_html, vertical, created_at)
-     VALUES (@id, @user_id, @monitored_site_id, @snapshot_id, @roadmap_json, @roadmap_html, @vertical, @created_at)`
-  ),
-  getRoadmap: db.prepare(`SELECT * FROM roadmaps WHERE id = ?`),
-  getLatestRoadmapBySite: db.prepare(
-    `SELECT * FROM roadmaps WHERE monitored_site_id = ? ORDER BY created_at DESC LIMIT 1`
-  ),
-  getRoadmapsByUser: db.prepare(`SELECT * FROM roadmaps WHERE user_id = ? ORDER BY created_at DESC LIMIT 20`),
-};
+// ── Monitored Sites API ─────────────────────────────────────────────────────
 
 const FREQUENCY_MS = {
   daily: 24 * 60 * 60 * 1000,
@@ -490,64 +378,66 @@ const FREQUENCY_MS = {
   monthly: 30 * 24 * 60 * 60 * 1000,
 };
 
-function createMonitoredSite({ id, userId, url, frequency = 'weekly', competitorUrls = [], notifyOn = null }) {
+async function createMonitoredSite({ id, userId, url, frequency = 'weekly', competitorUrls = [], notifyOn = null }) {
   const now = Date.now();
-  monitorStmts.insertSite.run({
-    id,
-    user_id: userId,
-    url,
-    frequency,
-    next_run_at: now, // run immediately on first check
-    competitor_urls: JSON.stringify(competitorUrls.slice(0, 3)),
-    notify_on: JSON.stringify(notifyOn || { score_drop: true, new_issues: true, competitor_change: true }),
-    enabled: 1,
-    created_at: now,
-  });
+  await pool.query(
+    `INSERT INTO monitored_sites (id, user_id, url, frequency, next_run_at, competitor_urls, notify_on, enabled, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8)`,
+    [id, userId, url, frequency, now, JSON.stringify(competitorUrls.slice(0, 3)),
+     JSON.stringify(notifyOn || { score_drop: true, new_issues: true, competitor_change: true }), now]
+  );
 }
 
-function getMonitoredSite(id) {
-  const row = monitorStmts.getSite.get(id);
-  return row ? rowToMonitoredSite(row) : null;
+async function getMonitoredSite(id) {
+  const { rows } = await pool.query(`SELECT * FROM monitored_sites WHERE id = $1`, [id]);
+  return rows[0] ? rowToMonitoredSite(rows[0]) : null;
 }
 
-function getMonitoredSitesByUser(userId) {
-  return monitorStmts.getSitesByUser.all(userId).map(rowToMonitoredSite);
+async function getMonitoredSitesByUser(userId) {
+  const { rows } = await pool.query(`SELECT * FROM monitored_sites WHERE user_id = $1 ORDER BY created_at DESC`, [userId]);
+  return rows.map(rowToMonitoredSite);
 }
 
-function updateMonitoredSite(id, { frequency, competitorUrls, notifyOn, enabled }) {
-  const existing = monitorStmts.getSite.get(id);
+async function updateMonitoredSite(id, { frequency, competitorUrls, notifyOn, enabled }) {
+  const { rows } = await pool.query(`SELECT * FROM monitored_sites WHERE id = $1`, [id]);
+  const existing = rows[0];
   if (!existing) return null;
   const freq = frequency || existing.frequency;
   const nextRun = frequency && frequency !== existing.frequency
     ? Date.now() + (FREQUENCY_MS[freq] || FREQUENCY_MS.weekly)
-    : existing.next_run_at;
-  monitorStmts.updateSite.run({
-    id,
-    frequency: freq,
-    competitor_urls: competitorUrls !== undefined ? JSON.stringify((competitorUrls || []).slice(0, 3)) : existing.competitor_urls,
-    notify_on: notifyOn !== undefined ? JSON.stringify(notifyOn) : existing.notify_on,
-    enabled: enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled,
-    next_run_at: nextRun,
-  });
+    : Number(existing.next_run_at);
+  await pool.query(
+    `UPDATE monitored_sites SET frequency = $1, competitor_urls = $2, notify_on = $3, enabled = $4, next_run_at = $5 WHERE id = $6`,
+    [freq,
+     competitorUrls !== undefined ? JSON.stringify((competitorUrls || []).slice(0, 3)) : existing.competitor_urls,
+     notifyOn !== undefined ? JSON.stringify(notifyOn) : existing.notify_on,
+     enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled,
+     nextRun, id]
+  );
   return getMonitoredSite(id);
 }
 
-function deleteMonitoredSite(id) {
-  monitorStmts.deleteSite.run(id);
+async function deleteMonitoredSite(id) {
+  await pool.query(`DELETE FROM monitored_sites WHERE id = $1`, [id]);
 }
 
-function getDueSites(limit = 10) {
-  return monitorStmts.getDueSites.all(Date.now(), limit).map(rowToMonitoredSite);
+async function getDueSites(limit = 10) {
+  const { rows } = await pool.query(
+    `SELECT * FROM monitored_sites WHERE enabled = 1 AND next_run_at <= $1 ORDER BY next_run_at ASC LIMIT $2`,
+    [Date.now(), limit]
+  );
+  return rows.map(rowToMonitoredSite);
 }
 
-function updateSiteNextRun(id, frequency) {
+async function updateSiteNextRun(id, frequency) {
   const intervalMs = FREQUENCY_MS[frequency] || FREQUENCY_MS.weekly;
   const now = Date.now();
-  monitorStmts.updateNextRun.run(now + intervalMs, now, id);
+  await pool.query(`UPDATE monitored_sites SET next_run_at = $1, last_run_at = $2 WHERE id = $3`, [now + intervalMs, now, id]);
 }
 
-function countUserMonitoredSites(userId) {
-  return monitorStmts.countUserSites.get(userId).cnt;
+async function countUserMonitoredSites(userId) {
+  const { rows } = await pool.query(`SELECT COUNT(*) as cnt FROM monitored_sites WHERE user_id = $1 AND enabled = 1`, [userId]);
+  return parseInt(rows[0].cnt, 10);
 }
 
 function rowToMonitoredSite(row) {
@@ -556,53 +446,59 @@ function rowToMonitoredSite(row) {
     userId: row.user_id,
     url: row.url,
     frequency: row.frequency,
-    nextRunAt: row.next_run_at,
-    lastRunAt: row.last_run_at,
+    nextRunAt: Number(row.next_run_at),
+    lastRunAt: row.last_run_at ? Number(row.last_run_at) : null,
     competitorUrls: JSON.parse(row.competitor_urls || '[]'),
     notifyOn: JSON.parse(row.notify_on || '{}'),
     enabled: !!row.enabled,
-    createdAt: row.created_at,
+    createdAt: Number(row.created_at),
   };
 }
 
-// ── Audit Snapshots API ──────────────────────────────────────────────────────
+// ── Audit Snapshots API ─────────────────────────────────────────────────────
 
-function saveSnapshot({ id, monitoredSiteId, reportId, seoScore, performanceScore, accessibilityScore, overallScore, issues, competitorScores }) {
-  monitorStmts.insertSnapshot.run({
-    id,
-    monitored_site_id: monitoredSiteId,
-    report_id: reportId || null,
-    seo_score: seoScore,
-    performance_score: performanceScore,
-    accessibility_score: accessibilityScore,
-    overall_score: overallScore,
-    issues_json: JSON.stringify(issues || []),
-    competitor_scores: JSON.stringify(competitorScores || {}),
-    created_at: Date.now(),
-  });
+async function saveSnapshot({ id, monitoredSiteId, reportId, seoScore, performanceScore, accessibilityScore, overallScore, issues, competitorScores }) {
+  await pool.query(
+    `INSERT INTO audit_snapshots (id, monitored_site_id, report_id, seo_score, performance_score, accessibility_score, overall_score, issues_json, competitor_scores, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [id, monitoredSiteId, reportId || null, seoScore, performanceScore, accessibilityScore, overallScore,
+     JSON.stringify(issues || []), JSON.stringify(competitorScores || {}), Date.now()]
+  );
 }
 
-function getSnapshot(id) {
-  const row = monitorStmts.getSnapshot.get(id);
-  return row ? rowToSnapshot(row) : null;
+async function getSnapshot(id) {
+  const { rows } = await pool.query(`SELECT * FROM audit_snapshots WHERE id = $1`, [id]);
+  return rows[0] ? rowToSnapshot(rows[0]) : null;
 }
 
-function getSnapshotsBySite(siteId, limit = 20) {
-  return monitorStmts.getSnapshotsBySite.all(siteId, limit).map(rowToSnapshot);
+async function getSnapshotsBySite(siteId, limit = 20) {
+  const { rows } = await pool.query(
+    `SELECT * FROM audit_snapshots WHERE monitored_site_id = $1 ORDER BY created_at DESC LIMIT $2`,
+    [siteId, limit]
+  );
+  return rows.map(rowToSnapshot);
 }
 
-function getLatestSnapshot(siteId) {
-  const row = monitorStmts.getLatestSnapshot.get(siteId);
-  return row ? rowToSnapshot(row) : null;
+async function getLatestSnapshot(siteId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM audit_snapshots WHERE monitored_site_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [siteId]
+  );
+  return rows[0] ? rowToSnapshot(rows[0]) : null;
 }
 
-function getTrendsBySite(siteId) {
-  return monitorStmts.getTrendsBySite.all(siteId).map(row => ({
+async function getTrendsBySite(siteId) {
+  const { rows } = await pool.query(
+    `SELECT seo_score, performance_score, accessibility_score, overall_score, created_at
+     FROM audit_snapshots WHERE monitored_site_id = $1 ORDER BY created_at ASC`,
+    [siteId]
+  );
+  return rows.map(row => ({
     seoScore: row.seo_score,
     performanceScore: row.performance_score,
     accessibilityScore: row.accessibility_score,
     overallScore: row.overall_score,
-    createdAt: row.created_at,
+    createdAt: Number(row.created_at),
   }));
 }
 
@@ -617,37 +513,39 @@ function rowToSnapshot(row) {
     overallScore: row.overall_score,
     issues: JSON.parse(row.issues_json || '[]'),
     competitorScores: JSON.parse(row.competitor_scores || '{}'),
-    createdAt: row.created_at,
+    createdAt: Number(row.created_at),
   };
 }
 
-// ── Roadmaps API ─────────────────────────────────────────────────────────────
+// ── Roadmaps API ────────────────────────────────────────────────────────────
 
-function saveRoadmap({ id, userId, monitoredSiteId, snapshotId, roadmapJson, roadmapHtml, vertical }) {
-  monitorStmts.insertRoadmap.run({
-    id,
-    user_id: userId,
-    monitored_site_id: monitoredSiteId || null,
-    snapshot_id: snapshotId || null,
-    roadmap_json: JSON.stringify(roadmapJson || {}),
-    roadmap_html: roadmapHtml || '',
-    vertical: vertical || null,
-    created_at: Date.now(),
-  });
+async function saveRoadmap({ id, userId, monitoredSiteId, snapshotId, roadmapJson, roadmapHtml, vertical }) {
+  await pool.query(
+    `INSERT INTO roadmaps (id, user_id, monitored_site_id, snapshot_id, roadmap_json, roadmap_html, vertical, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [id, userId, monitoredSiteId || null, snapshotId || null, JSON.stringify(roadmapJson || {}), roadmapHtml || '', vertical || null, Date.now()]
+  );
 }
 
-function getRoadmap(id) {
-  const row = monitorStmts.getRoadmap.get(id);
-  return row ? rowToRoadmap(row) : null;
+async function getRoadmap(id) {
+  const { rows } = await pool.query(`SELECT * FROM roadmaps WHERE id = $1`, [id]);
+  return rows[0] ? rowToRoadmap(rows[0]) : null;
 }
 
-function getLatestRoadmapBySite(siteId) {
-  const row = monitorStmts.getLatestRoadmapBySite.get(siteId);
-  return row ? rowToRoadmap(row) : null;
+async function getLatestRoadmapBySite(siteId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM roadmaps WHERE monitored_site_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [siteId]
+  );
+  return rows[0] ? rowToRoadmap(rows[0]) : null;
 }
 
-function getRoadmapsByUser(userId) {
-  return monitorStmts.getRoadmapsByUser.all(userId).map(rowToRoadmap);
+async function getRoadmapsByUser(userId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM roadmaps WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`,
+    [userId]
+  );
+  return rows.map(rowToRoadmap);
 }
 
 function rowToRoadmap(row) {
@@ -659,190 +557,180 @@ function rowToRoadmap(row) {
     roadmapJson: JSON.parse(row.roadmap_json || '{}'),
     roadmapHtml: row.roadmap_html,
     vertical: row.vertical,
-    createdAt: row.created_at,
+    createdAt: Number(row.created_at),
   };
 }
 
 // ── Admin helpers ───────────────────────────────────────────────────────────
 
-function countAdmins() {
-  return db.prepare(`SELECT COUNT(*) as cnt FROM users WHERE is_admin = 1`).get().cnt;
+async function countAdmins() {
+  const { rows } = await pool.query(`SELECT COUNT(*) as cnt FROM users WHERE is_admin = 1`);
+  return parseInt(rows[0].cnt, 10);
 }
 
-function setAdmin(userId, isAdmin) {
-  db.prepare(`UPDATE users SET is_admin = ? WHERE id = ?`).run(isAdmin ? 1 : 0, userId);
+async function setAdmin(userId, isAdmin) {
+  await pool.query(`UPDATE users SET is_admin = $1 WHERE id = $2`, [isAdmin ? 1 : 0, userId]);
 }
 
-function getAdminStats() {
-  const totalUsers = db.prepare(`SELECT COUNT(*) as cnt FROM users`).get().cnt;
-  const totalSubscribers = db.prepare(`SELECT COUNT(*) as cnt FROM subscriptions WHERE status IN ('active','trialing','cancelling')`).get().cnt;
-  const totalAudits = db.prepare(`SELECT COALESCE(SUM(audit_count),0) as cnt FROM subscriptions`).get().cnt;
-  const totalWaitlist = db.prepare(`SELECT COUNT(*) as cnt FROM waitlist`).get().cnt;
-  const totalMonitoredSites = db.prepare(`SELECT COUNT(*) as cnt FROM monitored_sites WHERE enabled = 1`).get().cnt;
-  const totalReports = db.prepare(`SELECT COUNT(*) as cnt FROM reports`).get().cnt;
+async function getAdminStats() {
+  const results = await Promise.all([
+    pool.query(`SELECT COUNT(*) as cnt FROM users`),
+    pool.query(`SELECT COUNT(*) as cnt FROM subscriptions WHERE status IN ('active','trialing','cancelling')`),
+    pool.query(`SELECT COALESCE(SUM(audit_count),0) as cnt FROM subscriptions`),
+    pool.query(`SELECT COUNT(*) as cnt FROM waitlist`),
+    pool.query(`SELECT COUNT(*) as cnt FROM monitored_sites WHERE enabled = 1`),
+    pool.query(`SELECT COUNT(*) as cnt FROM reports`),
+    pool.query(`SELECT COUNT(*) as cnt FROM subscriptions WHERE status IN ('active','cancelling') AND plan_tier = 'starter'`),
+    pool.query(`SELECT COUNT(*) as cnt FROM subscriptions WHERE status IN ('active','cancelling') AND plan_tier = 'pro'`),
+    pool.query(`SELECT COUNT(*) as cnt FROM subscriptions WHERE status = 'trialing'`),
+  ]);
 
-  // MRR calculation
-  const starterCount = db.prepare(`SELECT COUNT(*) as cnt FROM subscriptions WHERE status IN ('active','cancelling') AND plan_tier = 'starter'`).get().cnt;
-  const proCount = db.prepare(`SELECT COUNT(*) as cnt FROM subscriptions WHERE status IN ('active','cancelling') AND plan_tier = 'pro'`).get().cnt;
-  const trialingCount = db.prepare(`SELECT COUNT(*) as cnt FROM subscriptions WHERE status = 'trialing'`).get().cnt;
+  const [totalUsers, totalSubscribers, totalAudits, totalWaitlist, totalMonitoredSites, totalReports, starterCount, proCount, trialingCount] =
+    results.map(r => parseInt(r.rows[0].cnt, 10));
+
   const mrr = (starterCount * 9) + (proCount * 29);
 
   return { totalUsers, totalSubscribers, totalAudits, totalWaitlist, totalMonitoredSites, totalReports, starterCount, proCount, trialingCount, mrr };
 }
 
-function getAllUsers({ search, limit = 50, offset = 0 } = {}) {
+async function getAllUsers({ search, limit = 50, offset = 0 } = {}) {
   let query = `SELECT u.*, s.status as sub_status, s.plan_tier, s.audit_count as total_audits, s.email as sub_email
                FROM users u LEFT JOIN subscriptions s ON u.api_key = s.api_key`;
   const params = [];
+  let paramIdx = 1;
   if (search) {
-    query += ` WHERE u.username LIKE ? OR u.email LIKE ? OR COALESCE(s.email, '') LIKE ?`;
+    query += ` WHERE LOWER(u.username) LIKE LOWER($${paramIdx}) OR LOWER(u.email) LIKE LOWER($${paramIdx + 1}) OR LOWER(COALESCE(s.email, '')) LIKE LOWER($${paramIdx + 2})`;
     const like = `%${search}%`;
     params.push(like, like, like);
+    paramIdx += 3;
   }
-  query += ` ORDER BY u.created_at DESC LIMIT ? OFFSET ?`;
+  query += ` ORDER BY u.created_at DESC LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`;
   params.push(limit, offset);
-  return db.prepare(query).all(...params);
+  const { rows } = await pool.query(query, params);
+  return rows;
 }
 
-function getAllSubscriptions({ search, status, planTier, limit = 50, offset = 0 } = {}) {
+async function getAllSubscriptions({ search, status, planTier, limit = 50, offset = 0 } = {}) {
   let query = `SELECT s.*, u.username FROM subscriptions s LEFT JOIN users u ON u.api_key = s.api_key`;
   const conditions = [];
   const params = [];
+  let paramIdx = 1;
   if (search) {
-    conditions.push(`(s.email LIKE ? OR COALESCE(u.username, '') LIKE ?)`);
+    conditions.push(`(LOWER(s.email) LIKE LOWER($${paramIdx}) OR LOWER(COALESCE(u.username, '')) LIKE LOWER($${paramIdx + 1}))`);
     const like = `%${search}%`;
     params.push(like, like);
+    paramIdx += 2;
   }
   if (status) {
-    conditions.push(`s.status = ?`);
+    conditions.push(`s.status = $${paramIdx}`);
     params.push(status);
+    paramIdx++;
   }
   if (planTier) {
-    conditions.push(`s.plan_tier = ?`);
+    conditions.push(`s.plan_tier = $${paramIdx}`);
     params.push(planTier);
+    paramIdx++;
   }
   if (conditions.length) query += ` WHERE ` + conditions.join(' AND ');
-  query += ` ORDER BY s.created_at DESC LIMIT ? OFFSET ?`;
+  query += ` ORDER BY s.created_at DESC LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`;
   params.push(limit, offset);
-  return db.prepare(query).all(...params);
+  const { rows } = await pool.query(query, params);
+  return rows;
 }
 
-function updateSubscriptionFields(apiKey, fields) {
+async function updateSubscriptionFields(apiKey, fields) {
   const allowed = ['status', 'plan_tier', 'audit_count', 'monthly_audit_count'];
   const sets = [];
   const params = [];
+  let paramIdx = 1;
   for (const [k, v] of Object.entries(fields)) {
-    if (allowed.includes(k)) { sets.push(`${k} = ?`); params.push(v); }
+    if (allowed.includes(k)) { sets.push(`${k} = $${paramIdx}`); params.push(v); paramIdx++; }
   }
   if (!sets.length) return;
   params.push(apiKey);
-  db.prepare(`UPDATE subscriptions SET ${sets.join(', ')} WHERE api_key = ?`).run(...params);
+  await pool.query(`UPDATE subscriptions SET ${sets.join(', ')} WHERE api_key = $${paramIdx}`, params);
 }
 
-function getTimeSeriesSignups(days = 30) {
+async function getTimeSeriesSignups(days = 30) {
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-  return db.prepare(`
-    SELECT CAST(created_at / 86400000 AS INTEGER) as day_bucket, COUNT(*) as cnt
-    FROM users WHERE created_at >= ? GROUP BY day_bucket ORDER BY day_bucket ASC
-  `).all(cutoff);
+  const { rows } = await pool.query(`
+    SELECT (created_at / 86400000)::BIGINT as day_bucket, COUNT(*) as cnt
+    FROM users WHERE created_at >= $1 GROUP BY day_bucket ORDER BY day_bucket ASC
+  `, [cutoff]);
+  return rows.map(r => ({ day_bucket: Number(r.day_bucket), cnt: parseInt(r.cnt, 10) }));
 }
 
-function getTimeSeriesAudits(days = 30) {
+async function getTimeSeriesAudits(days = 30) {
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-  return db.prepare(`
-    SELECT CAST(created_at / 86400000 AS INTEGER) as day_bucket, COUNT(*) as cnt
-    FROM reports WHERE created_at >= ? GROUP BY day_bucket ORDER BY day_bucket ASC
-  `).all(cutoff);
+  const { rows } = await pool.query(`
+    SELECT (created_at / 86400000)::BIGINT as day_bucket, COUNT(*) as cnt
+    FROM reports WHERE created_at >= $1 GROUP BY day_bucket ORDER BY day_bucket ASC
+  `, [cutoff]);
+  return rows.map(r => ({ day_bucket: Number(r.day_bucket), cnt: parseInt(r.cnt, 10) }));
 }
 
-function getTimeSeriesRevenue(days = 30) {
+async function getTimeSeriesRevenue(days = 30) {
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-  return db.prepare(`
-    SELECT CAST(created_at / 86400000 AS INTEGER) as day_bucket,
+  const { rows } = await pool.query(`
+    SELECT (created_at / 86400000)::BIGINT as day_bucket,
            SUM(CASE WHEN plan_tier = 'starter' THEN 9 ELSE 29 END) as revenue,
            COUNT(*) as cnt
-    FROM subscriptions WHERE created_at >= ? AND status IN ('active','trialing','cancelling')
+    FROM subscriptions WHERE created_at >= $1 AND status IN ('active','trialing','cancelling')
     GROUP BY day_bucket ORDER BY day_bucket ASC
-  `).all(cutoff);
+  `, [cutoff]);
+  return rows.map(r => ({ day_bucket: Number(r.day_bucket), revenue: parseInt(r.revenue, 10), cnt: parseInt(r.cnt, 10) }));
 }
 
 // ── Support Tickets API ─────────────────────────────────────────────────────
 
-const supportStmts = {
-  insert: db.prepare(
-    `INSERT INTO support_tickets (id, ticket_number, email, user_id, category, subject, description, priority, status, assignee, internal_notes, status_history, created_at, updated_at)
-     VALUES (@id, @ticket_number, @email, @user_id, @category, @subject, @description, @priority, @status, @assignee, @internal_notes, @status_history, @created_at, @updated_at)`
-  ),
-  getById: db.prepare(`SELECT * FROM support_tickets WHERE id = ?`),
-  getByNumber: db.prepare(`SELECT * FROM support_tickets WHERE ticket_number = ?`),
-  getAll: db.prepare(`SELECT * FROM support_tickets ORDER BY created_at DESC LIMIT ? OFFSET ?`),
-  getByStatus: db.prepare(`SELECT * FROM support_tickets WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`),
-  getByEmail: db.prepare(`SELECT * FROM support_tickets WHERE email = ? ORDER BY created_at DESC`),
-  countAll: db.prepare(`SELECT COUNT(*) as cnt FROM support_tickets`),
-  countByStatus: db.prepare(`SELECT status, COUNT(*) as cnt FROM support_tickets GROUP BY status`),
-  update: db.prepare(
-    `UPDATE support_tickets SET status = @status, assignee = @assignee, internal_notes = @internal_notes, status_history = @status_history, priority = @priority, updated_at = @updated_at WHERE id = @id`
-  ),
-  nextTicketNum: db.prepare(`SELECT COUNT(*) as cnt FROM support_tickets`),
-  avgResponseTime: db.prepare(
-    `SELECT AVG(updated_at - created_at) as avg_ms FROM support_tickets WHERE status = 'resolved'`
-  ),
-  categoryBreakdown: db.prepare(
-    `SELECT category, COUNT(*) as cnt FROM support_tickets GROUP BY category`
-  ),
-};
-
-function generateTicketNumber() {
-  const cnt = supportStmts.nextTicketNum.get().cnt;
-  return `SUP-${String(cnt + 1).padStart(4, '0')}`;
+async function generateTicketNumber() {
+  const { rows } = await pool.query(`SELECT COUNT(*) as cnt FROM support_tickets`);
+  return `SUP-${String(parseInt(rows[0].cnt, 10) + 1).padStart(4, '0')}`;
 }
 
-function createSupportTicket({ id, email, userId, category, subject, description, priority }) {
+async function createSupportTicket({ id, email, userId, category, subject, description, priority }) {
   const now = Date.now();
-  const ticketNumber = generateTicketNumber();
+  const ticketNumber = await generateTicketNumber();
   const statusHistory = JSON.stringify([{ status: 'new', at: now }]);
-  supportStmts.insert.run({
-    id,
-    ticket_number: ticketNumber,
-    email: email || '',
-    user_id: userId || null,
-    category: category || 'other',
-    subject,
-    description,
-    priority: priority || 'medium',
-    status: 'new',
-    assignee: null,
-    internal_notes: '[]',
-    status_history: statusHistory,
-    created_at: now,
-    updated_at: now,
-  });
+  await pool.query(
+    `INSERT INTO support_tickets (id, ticket_number, email, user_id, category, subject, description, priority, status, assignee, internal_notes, status_history, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new', NULL, '[]', $9, $10, $11)`,
+    [id, ticketNumber, email || '', userId || null, category || 'other', subject, description, priority || 'medium', statusHistory, now, now]
+  );
   return getSupportTicket(id);
 }
 
-function getSupportTicket(id) {
-  const row = supportStmts.getById.get(id);
-  return row ? rowToTicket(row) : null;
+async function getSupportTicket(id) {
+  const { rows } = await pool.query(`SELECT * FROM support_tickets WHERE id = $1`, [id]);
+  return rows[0] ? rowToTicket(rows[0]) : null;
 }
 
-function getSupportTicketByNumber(ticketNumber) {
-  const row = supportStmts.getByNumber.get(ticketNumber);
-  return row ? rowToTicket(row) : null;
+async function getSupportTicketByNumber(ticketNumber) {
+  const { rows } = await pool.query(`SELECT * FROM support_tickets WHERE ticket_number = $1`, [ticketNumber]);
+  return rows[0] ? rowToTicket(rows[0]) : null;
 }
 
-function listSupportTickets({ status, limit = 50, offset = 0 } = {}) {
-  const rows = status
-    ? supportStmts.getByStatus.all(status, limit, offset)
-    : supportStmts.getAll.all(limit, offset);
+async function listSupportTickets({ status, limit = 50, offset = 0 } = {}) {
+  let query, params;
+  if (status) {
+    query = `SELECT * FROM support_tickets WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`;
+    params = [status, limit, offset];
+  } else {
+    query = `SELECT * FROM support_tickets ORDER BY created_at DESC LIMIT $1 OFFSET $2`;
+    params = [limit, offset];
+  }
+  const { rows } = await pool.query(query, params);
   return rows.map(rowToTicket);
 }
 
-function getSupportTicketsByEmail(email) {
-  return supportStmts.getByEmail.all(email).map(rowToTicket);
+async function getSupportTicketsByEmail(email) {
+  const { rows } = await pool.query(`SELECT * FROM support_tickets WHERE email = $1 ORDER BY created_at DESC`, [email]);
+  return rows.map(rowToTicket);
 }
 
-function updateSupportTicket(id, { status, assignee, internalNote, priority }) {
-  const existing = supportStmts.getById.get(id);
+async function updateSupportTicket(id, { status, assignee, internalNote, priority }) {
+  const { rows } = await pool.query(`SELECT * FROM support_tickets WHERE id = $1`, [id]);
+  const existing = rows[0];
   if (!existing) return null;
 
   const now = Date.now();
@@ -857,30 +745,29 @@ function updateSupportTicket(id, { status, assignee, internalNote, priority }) {
     history.push({ status, at: now });
   }
 
-  supportStmts.update.run({
-    id,
-    status: newStatus,
-    assignee: assignee !== undefined ? assignee : existing.assignee,
-    internal_notes: JSON.stringify(notes),
-    status_history: JSON.stringify(history),
-    priority: priority || existing.priority,
-    updated_at: now,
-  });
+  await pool.query(
+    `UPDATE support_tickets SET status = $1, assignee = $2, internal_notes = $3, status_history = $4, priority = $5, updated_at = $6 WHERE id = $7`,
+    [newStatus, assignee !== undefined ? assignee : existing.assignee, JSON.stringify(notes), JSON.stringify(history), priority || existing.priority, now, id]
+  );
 
   return getSupportTicket(id);
 }
 
-function getSupportTicketStats() {
-  const total = supportStmts.countAll.get().cnt;
+async function getSupportTicketStats() {
+  const [totalRes, byStatusRes, avgRes, catRes] = await Promise.all([
+    pool.query(`SELECT COUNT(*) as cnt FROM support_tickets`),
+    pool.query(`SELECT status, COUNT(*) as cnt FROM support_tickets GROUP BY status`),
+    pool.query(`SELECT AVG(updated_at - created_at) as avg_ms FROM support_tickets WHERE status = 'resolved'`),
+    pool.query(`SELECT category, COUNT(*) as cnt FROM support_tickets GROUP BY category`),
+  ]);
+
+  const total = parseInt(totalRes.rows[0].cnt, 10);
   const byStatus = {};
-  for (const row of supportStmts.countByStatus.all()) {
-    byStatus[row.status] = row.cnt;
-  }
-  const avgResponse = supportStmts.avgResponseTime.get().avg_ms || 0;
+  for (const row of byStatusRes.rows) { byStatus[row.status] = parseInt(row.cnt, 10); }
+  const avgResponse = parseFloat(avgRes.rows[0].avg_ms) || 0;
   const categories = {};
-  for (const row of supportStmts.categoryBreakdown.all()) {
-    categories[row.category] = row.cnt;
-  }
+  for (const row of catRes.rows) { categories[row.category] = parseInt(row.cnt, 10); }
+
   return {
     total,
     byStatus,
@@ -904,17 +791,18 @@ function rowToTicket(row) {
     assignee: row.assignee,
     internalNotes: JSON.parse(row.internal_notes || '[]'),
     statusHistory: JSON.parse(row.status_history || '[]'),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
   };
 }
 
-/** Cheap liveness check — throws if the DB connection is broken. */
-function ping() {
-  db.prepare('SELECT 1').get();
+async function ping() {
+  await pool.query('SELECT 1');
 }
 
 module.exports = {
+  migrate,
+  pool,
   ping,
   saveReportMeta,
   getReportMeta,

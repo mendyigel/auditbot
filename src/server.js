@@ -77,8 +77,8 @@ app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
 // Prune old report metadata (and orphaned files) daily
-setInterval(() => {
-  db.pruneOldReports(REPORT_TTL_MS);
+setInterval(async () => {
+  await db.pruneOldReports(REPORT_TTL_MS);
 }, 24 * 60 * 60 * 1000);
 
 // ── Trial email scheduler ──────────────────────────────────────────────────────
@@ -90,7 +90,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 async function runTrialEmailSchedule() {
   const now = Date.now();
   // Fetch all active/trialing subs created more than 2 days ago (earliest possible trigger)
-  const subs = db.getSubscriptionsForTrialEmails(now - 2 * DAY_MS);
+  const subs = await db.getSubscriptionsForTrialEmails(now - 2 * DAY_MS);
 
   for (const sub of subs) {
     const ageMs  = now - sub.createdAt;
@@ -103,19 +103,19 @@ async function runTrialEmailSchedule() {
         if (sub.auditCount === 0) {
           await emailService.sendTrialDay3(sub.email);
         }
-        db.markEmailSent(sub.apiKey, 'day3');
+        await db.markEmailSent(sub.apiKey, 'day3');
       }
 
       // Day 10: 4-days-left warning
       if (ageDays >= 10 && ageDays < 11 && !sent.day10) {
         await emailService.sendTrialDay10(sub.email);
-        db.markEmailSent(sub.apiKey, 'day10');
+        await db.markEmailSent(sub.apiKey, 'day10');
       }
 
       // Day 13: final warning
       if (ageDays >= 13 && ageDays < 14 && !sent.day13) {
         await emailService.sendTrialDay13(sub.email);
-        db.markEmailSent(sub.apiKey, 'day13');
+        await db.markEmailSent(sub.apiKey, 'day13');
       }
 
       // Day 14: trial expired (only send if still active — paid subs skip this)
@@ -123,7 +123,7 @@ async function runTrialEmailSchedule() {
         if (sub.status !== 'active') {
           await emailService.sendTrialExpired(sub.email);
         }
-        db.markEmailSent(sub.apiKey, 'day14');
+        await db.markEmailSent(sub.apiKey, 'day14');
       }
     } catch (err) {
       console.error(`[email scheduler] Error for ${sub.email}:`, err.message);
@@ -181,13 +181,13 @@ app.get('/blog/:slug', (req, res) => {
  * Body: { email: string }
  * Stores the email in the DB; a future drip campaign can be wired to it.
  */
-app.post('/waitlist', express.json(), (req, res) => {
+app.post('/waitlist', express.json(), async (req, res) => {
   const { email } = req.body || {};
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     return res.status(400).json({ error: 'Valid email required' });
   }
   const trimmed = email.trim().toLowerCase();
-  db.saveWaitlistEmail(trimmed);
+  await db.saveWaitlistEmail(trimmed);
   console.log(`[waitlist] Signup: ${trimmed}`);
   return res.json({ ok: true });
 });
@@ -233,13 +233,13 @@ app.get('/api', (_req, res) => {
  * Returns 503 + JSON when a critical dependency is unhealthy.
  * Monitored by UptimeRobot at 1-minute intervals.
  */
-app.get('/health', (_req, res) => {
+app.get('/health', async (_req, res) => {
   const checks = {};
   let allOk = true;
 
   // Database liveness: a cheap ping query
   try {
-    db.ping();
+    await db.ping();
     checks.database = 'ok';
   } catch (err) {
     checks.database = 'error';
@@ -520,7 +520,7 @@ app.post('/auth/signup', async (req, res) => {
   }
 
   const trimmedUsername = username.trim();
-  const existing = db.getUserByUsername(trimmedUsername);
+  const existing = await db.getUserByUsername(trimmedUsername);
   if (existing) {
     return res.status(409).json({ error: 'That username is already taken.' });
   }
@@ -530,7 +530,7 @@ app.post('/auth/signup', async (req, res) => {
     const userId = uuidv4();
     const sessionToken = crypto.randomBytes(32).toString('hex');
 
-    db.createUser({
+    await db.createUser({
       id: userId,
       username: trimmedUsername,
       passwordHash,
@@ -543,7 +543,7 @@ app.post('/auth/signup', async (req, res) => {
     // If a pending trial API key exists (from Stripe checkout before signup), link it now
     const pendingKey = req.cookies && req.cookies.pending_trial_key;
     if (pendingKey) {
-      db.linkUserApiKey(userId, pendingKey);
+      await db.linkUserApiKey(userId, pendingKey);
       res.clearCookie('pending_trial_key', { path: '/' });
     }
 
@@ -578,7 +578,7 @@ app.post('/auth/signin', async (req, res) => {
     return res.status(400).json({ error: 'Username and password are required.' });
   }
 
-  const user = db.getUserByUsername(username.trim());
+  const user = await db.getUserByUsername(username.trim());
   if (!user) {
     return res.status(401).json({ error: 'Invalid username or password.' });
   }
@@ -590,7 +590,7 @@ app.post('/auth/signin', async (req, res) => {
 
   // Block cancelled users — they must resubscribe before accessing the site
   if (user.api_key && process.env.STRIPE_SECRET_KEY) {
-    const sub = lookupSubscription(user.api_key);
+    const sub = await lookupSubscription(user.api_key);
     if (sub && sub.status === 'cancelled') {
       const appUrl = process.env.APP_URL || '';
       return res.status(403).json({
@@ -601,14 +601,14 @@ app.post('/auth/signin', async (req, res) => {
   }
 
   const sessionToken = crypto.randomBytes(32).toString('hex');
-  db.updateUserSession(user.id, sessionToken);
+  await db.updateUserSession(user.id, sessionToken);
 
   res.cookie('session', sessionToken, cookieOpts({ maxAge: 30 * 24 * 60 * 60 * 1000 }));
 
   // Link pending trial key if present (user completed Stripe before signing in)
   const pendingKey = req.cookies && req.cookies.pending_trial_key;
   if (pendingKey && !user.api_key) {
-    db.linkUserApiKey(user.id, pendingKey);
+    await db.linkUserApiKey(user.id, pendingKey);
     res.clearCookie('pending_trial_key', { path: '/' });
   }
 
@@ -619,11 +619,11 @@ app.post('/auth/signin', async (req, res) => {
  * POST /auth/signout
  * Clears session cookie and invalidates session token.
  */
-app.post('/auth/signout', (req, res) => {
+app.post('/auth/signout', async (req, res) => {
   const sessionToken = req.cookies && req.cookies.session;
   if (sessionToken) {
-    const user = db.getUserBySessionToken(sessionToken);
-    if (user) db.updateUserSession(user.id, null);
+    const user = await db.getUserBySessionToken(sessionToken);
+    if (user) await db.updateUserSession(user.id, null);
   }
   res.clearCookie('session', { path: '/' });
   return res.json({ ok: true });
@@ -713,11 +713,11 @@ app.post('/auth/forgot-password', async (req, res) => {
   if (!email || typeof email !== 'string') {
     return res.json({ ok: true }); // don't reveal whether email exists
   }
-  const user = db.getUserByEmail(email.trim());
+  const user = await db.getUserByEmail(email.trim());
   if (user) {
     const token = crypto.randomBytes(32).toString('hex');
     const expires = Date.now() + RESET_TOKEN_TTL_MS;
-    db.setResetToken(user.id, token, expires);
+    await db.setResetToken(user.id, token, expires);
     const base = process.env.APP_URL || 'http://localhost:' + PORT;
     const resetUrl = base + '/auth/reset-password?token=' + token;
     emailService.sendPasswordReset(user.email, { resetUrl }).catch((err) => {
@@ -731,9 +731,9 @@ app.post('/auth/forgot-password', async (req, res) => {
  * GET /auth/reset-password?token=...
  * Page with new password form.
  */
-app.get('/auth/reset-password', (req, res) => {
+app.get('/auth/reset-password', async (req, res) => {
   const token = req.query.token || '';
-  const user = token ? db.getUserByResetToken(token) : null;
+  const user = token ? await db.getUserByResetToken(token) : null;
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   if (!user) {
     return res.send('<!DOCTYPE html>' +
@@ -829,15 +829,15 @@ app.post('/auth/reset-password', async (req, res) => {
   if (typeof password !== 'string' || password.length < 8) {
     return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   }
-  const user = db.getUserByResetToken(token);
+  const user = await db.getUserByResetToken(token);
   if (!user) {
     return res.status(400).json({ error: 'Invalid or expired reset link. Please request a new one.' });
   }
   try {
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    db.updatePassword(user.id, passwordHash);
+    await db.updatePassword(user.id, passwordHash);
     // Invalidate existing sessions for security
-    db.updateUserSession(user.id, null);
+    await db.updateUserSession(user.id, null);
     return res.json({ ok: true });
   } catch (err) {
     console.error('[auth/reset-password error]', err);
@@ -850,13 +850,13 @@ app.post('/auth/reset-password', async (req, res) => {
  * Authenticated user dashboard — shows account info, subscription status, audit tools.
  * Features tabbed navigation: Run Audit, My Reports, Account.
  */
-app.get('/dashboard', (req, res) => {
+app.get('/dashboard', async (req, res) => {
   const sessionToken = req.cookies && req.cookies.session;
   if (!sessionToken) return res.redirect('/signin');
-  const user = db.getUserBySessionToken(sessionToken);
+  const user = await db.getUserBySessionToken(sessionToken);
   if (!user) return res.redirect('/signin');
 
-  const sub = user.api_key ? lookupSubscription(user.api_key) : null;
+  const sub = user.api_key ? await lookupSubscription(user.api_key) : null;
   const hasActiveSub = sub && (sub.status === 'active' || sub.status === 'trialing' || sub.status === 'cancelling');
 
   // Redirect cancelled users to a resubscribe page instead of the full dashboard
@@ -1407,12 +1407,12 @@ ${consentBannerSnippet()}
  * GET /api/my-reports
  * Returns JSON array of the logged-in user's recent audit reports.
  */
-app.get('/api/my-reports', (req, res) => {
+app.get('/api/my-reports', async (req, res) => {
   const sessionToken = req.cookies && req.cookies.session;
   if (!sessionToken) return res.status(401).json({ error: 'Not authenticated' });
-  const user = db.getUserBySessionToken(sessionToken);
+  const user = await db.getUserBySessionToken(sessionToken);
   if (!user) return res.status(401).json({ error: 'Not authenticated' });
-  const reports = db.getReportsByUser(user.id);
+  const reports = await db.getReportsByUser(user.id);
   return res.json({ reports });
 });
 
@@ -1633,20 +1633,20 @@ app.get('/billing/trial/success', async (req, res) => {
   // If the user has a session cookie, link the API key to their account
   const sessionToken = req.cookies && req.cookies.session;
   if (sessionToken && apiKey) {
-    const user = db.getUserBySessionToken(sessionToken);
+    const user = await db.getUserBySessionToken(sessionToken);
     if (user) {
-      db.linkUserApiKey(user.id, apiKey);
+      await db.linkUserApiKey(user.id, apiKey);
       return res.redirect('/dashboard');
     }
   }
 
   // Look up existing user by email from Stripe session and auto-login
   if (apiKey && customerEmail) {
-    const existingUser = db.getUserByEmail(customerEmail);
+    const existingUser = await db.getUserByEmail(customerEmail);
     if (existingUser) {
-      db.linkUserApiKey(existingUser.id, apiKey);
+      await db.linkUserApiKey(existingUser.id, apiKey);
       const newSessionToken = crypto.randomBytes(32).toString('hex');
-      db.updateUserSession(existingUser.id, newSessionToken);
+      await db.updateUserSession(existingUser.id, newSessionToken);
       res.cookie('session', newSessionToken, cookieOpts({ maxAge: 30 * 24 * 60 * 60 * 1000 }));
       return res.redirect('/dashboard');
     }
@@ -1665,18 +1665,18 @@ app.get('/billing/trial/success', async (req, res) => {
  * Returns trial usage info (audits used/limit, PDFs used/limit, days left).
  * Works for trialing subscriptions only; returns null fields for paid.
  */
-app.get('/trial/status', (req, res) => {
+app.get('/trial/status', async (req, res) => {
   const apiKey = req.query.key;
   if (!apiKey) return res.status(400).json({ error: 'Missing query param: key' });
 
-  const sub = lookupSubscription(apiKey);
+  const sub = await lookupSubscription(apiKey);
   if (!sub) return res.status(404).json({ error: 'API key not found' });
 
   const plan = PLANS[sub.planTier] || PLANS.pro;
   const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
 
   if (sub.status !== 'trialing') {
-    const monthlyCount = db.getMonthlyAuditCount(apiKey);
+    const monthlyCount = await db.getMonthlyAuditCount(apiKey);
     return res.json({
       status: sub.status,
       plan: {
@@ -1733,20 +1733,20 @@ app.get('/billing/success', async (req, res) => {
   // Link API key to logged-in user if they have a session
   const sessionToken = req.cookies && req.cookies.session;
   if (sessionToken && apiKey) {
-    const user = db.getUserBySessionToken(sessionToken);
+    const user = await db.getUserBySessionToken(sessionToken);
     if (user) {
-      db.linkUserApiKey(user.id, apiKey);
+      await db.linkUserApiKey(user.id, apiKey);
       return res.redirect('/dashboard');
     }
   }
 
   // Look up existing user by email from Stripe session and auto-login
   if (apiKey && customerEmail) {
-    const existingUser = db.getUserByEmail(customerEmail);
+    const existingUser = await db.getUserByEmail(customerEmail);
     if (existingUser) {
-      db.linkUserApiKey(existingUser.id, apiKey);
+      await db.linkUserApiKey(existingUser.id, apiKey);
       const newSessionToken = crypto.randomBytes(32).toString('hex');
-      db.updateUserSession(existingUser.id, newSessionToken);
+      await db.updateUserSession(existingUser.id, newSessionToken);
       res.cookie('session', newSessionToken, cookieOpts({ maxAge: 30 * 24 * 60 * 60 * 1000 }));
       return res.redirect('/dashboard');
     }
@@ -1802,7 +1802,7 @@ app.post('/billing/portal', async (req, res) => {
   if (!apiKey) {
     return res.status(400).json({ error: 'Missing required field: apiKey' });
   }
-  const sub = lookupSubscription(apiKey);
+  const sub = await lookupSubscription(apiKey);
   if (!sub) {
     return res.status(404).json({ error: 'API key not found' });
   }
@@ -1826,7 +1826,7 @@ app.post('/billing/portal', async (req, res) => {
 app.get('/billing/portal', async (req, res) => {
   const apiKey = req.query.key;
   if (!apiKey) return res.status(400).json({ error: 'Missing query param: key' });
-  const sub = lookupSubscription(apiKey);
+  const sub = await lookupSubscription(apiKey);
   if (!sub) return res.status(404).json({ error: 'API key not found' });
   try {
     const base = process.env.APP_URL || `http://localhost:${PORT}`;
@@ -1851,7 +1851,7 @@ app.post('/billing/cancel-subscription', async (req, res) => {
   if (!apiKey) {
     const sessionToken = req.cookies && req.cookies.session;
     if (sessionToken) {
-      const user = db.getUserBySessionToken(sessionToken);
+      const user = await db.getUserBySessionToken(sessionToken);
       if (user && user.api_key) apiKey = user.api_key;
     }
   }
@@ -1860,7 +1860,7 @@ app.post('/billing/cancel-subscription', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized. Sign in or provide an API key.' });
   }
 
-  const sub = lookupSubscription(apiKey);
+  const sub = await lookupSubscription(apiKey);
   if (!sub) {
     return res.status(404).json({ error: 'Subscription not found.' });
   }
@@ -2004,13 +2004,13 @@ app.post('/audit', requireActiveSubscription, async (req, res) => {
     const storageKey = await saveReport(reportId, html);
     // Resolve user ID from session for report history
     const _sessionToken = req.cookies && req.cookies.session;
-    const _sessionUser = _sessionToken ? db.getUserBySessionToken(_sessionToken) : null;
-    db.saveReportMeta({ id: reportId, url: targetUrl, storageKey, audit, userId: _sessionUser ? _sessionUser.id : null });
+    const _sessionUser = _sessionToken ? await db.getUserBySessionToken(_sessionToken) : null;
+    await db.saveReportMeta({ id: reportId, url: targetUrl, storageKey, audit, userId: _sessionUser ? _sessionUser.id : null });
 
     // Track audit count for trial email triggers and monthly limits
     if (req.subscription?.apiKey) {
-      db.incrementAuditCount(req.subscription.apiKey);
-      db.incrementMonthlyAuditCount(req.subscription.apiKey);
+      await db.incrementAuditCount(req.subscription.apiKey);
+      await db.incrementMonthlyAuditCount(req.subscription.apiKey);
     }
 
     // Server-side analytics event
@@ -2039,7 +2039,7 @@ app.post('/audit', requireActiveSubscription, async (req, res) => {
       const { agency = '', agencyUrl = '' } = req.body || {};
       const pdfBuffer = await generatePdf(audit, { agencyName: agency, agencyUrl });
       const filename = `audit-${encodeURIComponent(targetUrl.replace(/https?:\/\//, ''))}.pdf`;
-      if (sub?.apiKey) db.incrementPdfCount(sub.apiKey);
+      if (sub?.apiKey) await db.incrementPdfCount(sub.apiKey);
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       return res.send(pdfBuffer);
@@ -2059,7 +2059,7 @@ app.post('/audit', requireActiveSubscription, async (req, res) => {
  * Serves a persisted HTML report.
  */
 app.get('/report/:id', async (req, res) => {
-  const meta = db.getReportMeta(req.params.id);
+  const meta = await db.getReportMeta(req.params.id);
   if (!meta) {
     return res.status(404).send('<h1>Report not found</h1><p>This report does not exist or has been removed. Re-run the audit to generate a new one.</p>');
   }
@@ -2078,7 +2078,7 @@ app.get('/report/:id', async (req, res) => {
  * Requires active subscription + trial PDF limit enforcement.
  */
 app.get('/report/:id/pdf', requireActiveSubscription, requirePdfAllowed, async (req, res) => {
-  const meta = db.getReportMeta(req.params.id);
+  const meta = await db.getReportMeta(req.params.id);
   if (!meta) {
     return res.status(404).json({ error: 'Report not found. Re-run the audit to generate a new one.' });
   }
@@ -2086,7 +2086,7 @@ app.get('/report/:id/pdf', requireActiveSubscription, requirePdfAllowed, async (
     const { agency = '', agencyUrl = '' } = req.query;
     const pdfBuffer = await generatePdf(meta.audit, { agencyName: agency, agencyUrl });
     const safeUrl = meta.audit.url.replace(/https?:\/\//, '').replace(/[^a-z0-9.-]/gi, '-');
-    if (req.subscription?.apiKey) db.incrementPdfCount(req.subscription.apiKey);
+    if (req.subscription?.apiKey) await db.incrementPdfCount(req.subscription.apiKey);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="audit-${safeUrl}.pdf"`);
     trackServerEvent('pdf_export', {}, req).catch(() => {});
@@ -2149,8 +2149,8 @@ app.post('/audit/site', allowFreeTier, async (req, res) => {
 
     // Track usage
     if (req.subscription?.apiKey) {
-      db.incrementAuditCount(req.subscription.apiKey);
-      db.incrementMonthlyAuditCount(req.subscription.apiKey);
+      await db.incrementAuditCount(req.subscription.apiKey);
+      await db.incrementMonthlyAuditCount(req.subscription.apiKey);
     }
     trackServerEvent('audit_run', { format: 'site_crawl' }, req).catch(() => {});
 
@@ -2189,8 +2189,8 @@ app.post('/audit/competitors', allowFreeTier, async (req, res) => {
     const result = await benchmarkCompetitors(targetUrl, competitors);
 
     if (req.subscription?.apiKey) {
-      db.incrementAuditCount(req.subscription.apiKey);
-      db.incrementMonthlyAuditCount(req.subscription.apiKey);
+      await db.incrementAuditCount(req.subscription.apiKey);
+      await db.incrementMonthlyAuditCount(req.subscription.apiKey);
     }
     trackServerEvent('audit_run', { format: 'competitor_benchmark' }, req).catch(() => {});
 
@@ -2244,8 +2244,8 @@ app.post('/audit/keywords', requireActiveSubscription, requireProPlan, async (re
     const result = await mapKeywordOpportunities(targetUrl, null, { maxKeywords });
 
     if (req.subscription?.apiKey) {
-      db.incrementAuditCount(req.subscription.apiKey);
-      db.incrementMonthlyAuditCount(req.subscription.apiKey);
+      await db.incrementAuditCount(req.subscription.apiKey);
+      await db.incrementMonthlyAuditCount(req.subscription.apiKey);
     }
     trackServerEvent('audit_run', { format: 'keyword_mapping' }, req).catch(() => {});
 
@@ -2285,8 +2285,8 @@ app.post('/audit/content-gaps', requireActiveSubscription, requireProPlan, async
     const result = await analyzeContentGaps(targetUrl, competitors, null, { maxGaps });
 
     if (req.subscription?.apiKey) {
-      db.incrementAuditCount(req.subscription.apiKey);
-      db.incrementMonthlyAuditCount(req.subscription.apiKey);
+      await db.incrementAuditCount(req.subscription.apiKey);
+      await db.incrementMonthlyAuditCount(req.subscription.apiKey);
     }
     trackServerEvent('audit_run', { format: 'content_gap_analysis' }, req).catch(() => {});
 
@@ -2368,16 +2368,16 @@ app.post('/audit/full', allowFreeTier, async (req, res) => {
       const reportId = uuidv4();
       const storageKey = await saveReport(reportId, html);
       const _sessionToken = req.cookies && req.cookies.session;
-      const _sessionUser = _sessionToken ? db.getUserBySessionToken(_sessionToken) : null;
-      db.saveReportMeta({ id: reportId, url: targetUrl, storageKey, audit, userId: _sessionUser ? _sessionUser.id : null });
+      const _sessionUser = _sessionToken ? await db.getUserBySessionToken(_sessionToken) : null;
+      await db.saveReportMeta({ id: reportId, url: targetUrl, storageKey, audit, userId: _sessionUser ? _sessionUser.id : null });
 
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       return res.send(html);
     }
 
     if (req.subscription?.apiKey) {
-      db.incrementAuditCount(req.subscription.apiKey);
-      db.incrementMonthlyAuditCount(req.subscription.apiKey);
+      await db.incrementAuditCount(req.subscription.apiKey);
+      await db.incrementMonthlyAuditCount(req.subscription.apiKey);
     }
     trackServerEvent('audit_run', { format: 'full_audit' }, req).catch(() => {});
 
@@ -2392,15 +2392,15 @@ app.post('/audit/full', allowFreeTier, async (req, res) => {
 // ── Monitoring API (Pro plan required) ────────────────────────────────────────
 
 /** Resolve user from session cookie — returns user row or null. */
-function resolveSessionUser(req) {
+async function resolveSessionUser(req) {
   const sessionToken = req.cookies && req.cookies.session;
   if (!sessionToken) return null;
-  return db.getUserBySessionToken(sessionToken) || null;
+  return await db.getUserBySessionToken(sessionToken) || null;
 }
 
 /** POST /monitor/sites — Create a monitored site */
-app.post('/monitor/sites', requireActiveSubscription, requireProPlan, (req, res) => {
-  const user = resolveSessionUser(req);
+app.post('/monitor/sites', requireActiveSubscription, requireProPlan, async (req, res) => {
+  const user = await resolveSessionUser(req);
   if (!user) return res.status(401).json({ error: 'Sign in required' });
 
   const { url, frequency, competitorUrls, notifyOn } = req.body || {};
@@ -2409,7 +2409,7 @@ app.post('/monitor/sites', requireActiveSubscription, requireProPlan, (req, res)
   }
 
   // Enforce per-user limit
-  const count = db.countUserMonitoredSites(user.id);
+  const count = await db.countUserMonitoredSites(user.id);
   if (count >= MAX_SITES_PER_USER) {
     return res.status(400).json({
       error: `Maximum ${MAX_SITES_PER_USER} monitored sites allowed`,
@@ -2422,7 +2422,7 @@ app.post('/monitor/sites', requireActiveSubscription, requireProPlan, (req, res)
   const competitors = Array.isArray(competitorUrls) ? competitorUrls.slice(0, 3) : [];
 
   const id = uuidv4();
-  db.createMonitoredSite({
+  await db.createMonitoredSite({
     id,
     userId: user.id,
     url: url.trim(),
@@ -2431,19 +2431,19 @@ app.post('/monitor/sites', requireActiveSubscription, requireProPlan, (req, res)
     notifyOn: notifyOn || undefined,
   });
 
-  const site = db.getMonitoredSite(id);
+  const site = await db.getMonitoredSite(id);
   res.status(201).json(site);
 });
 
 /** GET /monitor/sites — List user's monitored sites */
-app.get('/monitor/sites', requireActiveSubscription, requireProPlan, (req, res) => {
-  const user = resolveSessionUser(req);
+app.get('/monitor/sites', requireActiveSubscription, requireProPlan, async (req, res) => {
+  const user = await resolveSessionUser(req);
   if (!user) return res.status(401).json({ error: 'Sign in required' });
 
-  const sites = db.getMonitoredSitesByUser(user.id);
+  const sites = await db.getMonitoredSitesByUser(user.id);
   // Attach latest snapshot summary to each site
-  const enriched = sites.map(site => {
-    const latest = db.getLatestSnapshot(site.id);
+  const enriched = await Promise.all(sites.map(async site => {
+    const latest = await db.getLatestSnapshot(site.id);
     return {
       ...site,
       latestSnapshot: latest ? {
@@ -2454,65 +2454,65 @@ app.get('/monitor/sites', requireActiveSubscription, requireProPlan, (req, res) 
         createdAt: latest.createdAt,
       } : null,
     };
-  });
+  }));
   res.json(enriched);
 });
 
 /** PATCH /monitor/sites/:id — Update a monitored site */
-app.patch('/monitor/sites/:id', requireActiveSubscription, requireProPlan, (req, res) => {
-  const user = resolveSessionUser(req);
+app.patch('/monitor/sites/:id', requireActiveSubscription, requireProPlan, async (req, res) => {
+  const user = await resolveSessionUser(req);
   if (!user) return res.status(401).json({ error: 'Sign in required' });
 
-  const site = db.getMonitoredSite(req.params.id);
+  const site = await db.getMonitoredSite(req.params.id);
   if (!site || site.userId !== user.id) {
     return res.status(404).json({ error: 'Monitored site not found' });
   }
 
   const { frequency, competitorUrls, notifyOn, enabled } = req.body || {};
-  const updated = db.updateMonitoredSite(req.params.id, { frequency, competitorUrls, notifyOn, enabled });
+  const updated = await db.updateMonitoredSite(req.params.id, { frequency, competitorUrls, notifyOn, enabled });
   res.json(updated);
 });
 
 /** DELETE /monitor/sites/:id — Remove a monitored site */
-app.delete('/monitor/sites/:id', requireActiveSubscription, requireProPlan, (req, res) => {
-  const user = resolveSessionUser(req);
+app.delete('/monitor/sites/:id', requireActiveSubscription, requireProPlan, async (req, res) => {
+  const user = await resolveSessionUser(req);
   if (!user) return res.status(401).json({ error: 'Sign in required' });
 
-  const site = db.getMonitoredSite(req.params.id);
+  const site = await db.getMonitoredSite(req.params.id);
   if (!site || site.userId !== user.id) {
     return res.status(404).json({ error: 'Monitored site not found' });
   }
 
-  db.deleteMonitoredSite(req.params.id);
+  await db.deleteMonitoredSite(req.params.id);
   res.json({ deleted: true });
 });
 
 /** GET /monitor/sites/:id/history — Get audit snapshots for a site */
-app.get('/monitor/sites/:id/history', requireActiveSubscription, requireProPlan, (req, res) => {
-  const user = resolveSessionUser(req);
+app.get('/monitor/sites/:id/history', requireActiveSubscription, requireProPlan, async (req, res) => {
+  const user = await resolveSessionUser(req);
   if (!user) return res.status(401).json({ error: 'Sign in required' });
 
-  const site = db.getMonitoredSite(req.params.id);
+  const site = await db.getMonitoredSite(req.params.id);
   if (!site || site.userId !== user.id) {
     return res.status(404).json({ error: 'Monitored site not found' });
   }
 
   const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
-  const snapshots = db.getSnapshotsBySite(req.params.id, limit);
+  const snapshots = await db.getSnapshotsBySite(req.params.id, limit);
   res.json(snapshots);
 });
 
 /** GET /monitor/sites/:id/trends — Get score trends (chart-ready) */
-app.get('/monitor/sites/:id/trends', requireActiveSubscription, requireProPlan, (req, res) => {
-  const user = resolveSessionUser(req);
+app.get('/monitor/sites/:id/trends', requireActiveSubscription, requireProPlan, async (req, res) => {
+  const user = await resolveSessionUser(req);
   if (!user) return res.status(401).json({ error: 'Sign in required' });
 
-  const site = db.getMonitoredSite(req.params.id);
+  const site = await db.getMonitoredSite(req.params.id);
   if (!site || site.userId !== user.id) {
     return res.status(404).json({ error: 'Monitored site not found' });
   }
 
-  const trends = db.getTrendsBySite(req.params.id);
+  const trends = await db.getTrendsBySite(req.params.id);
   res.json({ siteId: req.params.id, url: site.url, trends });
 });
 
@@ -2520,34 +2520,34 @@ app.get('/monitor/sites/:id/trends', requireActiveSubscription, requireProPlan, 
 
 /** POST /roadmap/generate — Generate AI roadmap for a site */
 app.post('/roadmap/generate', requireActiveSubscription, requireProPlan, async (req, res) => {
-  const user = resolveSessionUser(req);
+  const user = await resolveSessionUser(req);
   if (!user) return res.status(401).json({ error: 'Sign in required' });
 
   const { siteId, snapshotId, vertical } = req.body || {};
   if (!siteId) return res.status(400).json({ error: 'Missing required field: siteId' });
 
-  const site = db.getMonitoredSite(siteId);
+  const site = await db.getMonitoredSite(siteId);
   if (!site || site.userId !== user.id) {
     return res.status(404).json({ error: 'Monitored site not found' });
   }
 
   // Rate limit: 1 roadmap per site per day
-  const existingRoadmap = db.getLatestRoadmapBySite(siteId);
+  const existingRoadmap = await db.getLatestRoadmapBySite(siteId);
   if (existingRoadmap && (Date.now() - existingRoadmap.createdAt) < 24 * 60 * 60 * 1000) {
     return res.json(existingRoadmap);
   }
 
   // Get snapshot data
   const snapshot = snapshotId
-    ? db.getSnapshot(snapshotId)
-    : db.getLatestSnapshot(siteId);
+    ? await db.getSnapshot(snapshotId)
+    : await db.getLatestSnapshot(siteId);
 
   if (!snapshot) {
     return res.status(400).json({ error: 'No audit snapshot available. Run a monitoring audit first.' });
   }
 
   // Get trend data
-  const trends = db.getTrendsBySite(siteId);
+  const trends = await db.getTrendsBySite(siteId);
 
   try {
     const { generateRoadmap } = require('./roadmap');
@@ -2560,7 +2560,7 @@ app.post('/roadmap/generate', requireActiveSubscription, requireProPlan, async (
     });
 
     const roadmapId = uuidv4();
-    db.saveRoadmap({
+    await db.saveRoadmap({
       id: roadmapId,
       userId: user.id,
       monitoredSiteId: siteId,
@@ -2570,7 +2570,7 @@ app.post('/roadmap/generate', requireActiveSubscription, requireProPlan, async (
       vertical: roadmap.vertical || vertical,
     });
 
-    res.status(201).json(db.getRoadmap(roadmapId));
+    res.status(201).json(await db.getRoadmap(roadmapId));
   } catch (err) {
     console.error('[roadmap] Generation error:', err.message);
     res.status(500).json({ error: 'Roadmap generation failed', detail: err.message });
@@ -2578,11 +2578,11 @@ app.post('/roadmap/generate', requireActiveSubscription, requireProPlan, async (
 });
 
 /** GET /roadmap/:id — Get a generated roadmap */
-app.get('/roadmap/:id', requireActiveSubscription, requireProPlan, (req, res) => {
-  const user = resolveSessionUser(req);
+app.get('/roadmap/:id', requireActiveSubscription, requireProPlan, async (req, res) => {
+  const user = await resolveSessionUser(req);
   if (!user) return res.status(401).json({ error: 'Sign in required' });
 
-  const roadmap = db.getRoadmap(req.params.id);
+  const roadmap = await db.getRoadmap(req.params.id);
   if (!roadmap || roadmap.userId !== user.id) {
     return res.status(404).json({ error: 'Roadmap not found' });
   }
@@ -2590,16 +2590,16 @@ app.get('/roadmap/:id', requireActiveSubscription, requireProPlan, (req, res) =>
 });
 
 /** GET /roadmap/latest/:siteId — Get most recent roadmap for a monitored site */
-app.get('/roadmap/latest/:siteId', requireActiveSubscription, requireProPlan, (req, res) => {
-  const user = resolveSessionUser(req);
+app.get('/roadmap/latest/:siteId', requireActiveSubscription, requireProPlan, async (req, res) => {
+  const user = await resolveSessionUser(req);
   if (!user) return res.status(401).json({ error: 'Sign in required' });
 
-  const site = db.getMonitoredSite(req.params.siteId);
+  const site = await db.getMonitoredSite(req.params.siteId);
   if (!site || site.userId !== user.id) {
     return res.status(404).json({ error: 'Monitored site not found' });
   }
 
-  const roadmap = db.getLatestRoadmapBySite(req.params.siteId);
+  const roadmap = await db.getLatestRoadmapBySite(req.params.siteId);
   if (!roadmap) {
     return res.status(404).json({ error: 'No roadmap generated yet' });
   }
@@ -2608,8 +2608,8 @@ app.get('/roadmap/latest/:siteId', requireActiveSubscription, requireProPlan, (r
 
 // ── First-time admin setup ──────────────────────────────────────────────────
 
-app.get('/setup', (req, res) => {
-  const adminCount = db.countAdmins();
+app.get('/setup', async (req, res) => {
+  const adminCount = await db.countAdmins();
   if (adminCount > 0) {
     return res.send(`<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -2619,7 +2619,7 @@ app.get('/setup', (req, res) => {
   }
 
   const sessionToken = req.cookies && req.cookies.session;
-  const user = sessionToken ? db.getUserBySessionToken(sessionToken) : null;
+  const user = sessionToken ? await db.getUserBySessionToken(sessionToken) : null;
 
   if (!user) {
     return res.send(`<!DOCTYPE html>
@@ -2638,19 +2638,19 @@ app.get('/setup', (req, res) => {
 </div></body></html>`);
 });
 
-app.post('/api/admin/promote', (req, res) => {
-  const adminCount = db.countAdmins();
+app.post('/api/admin/promote', async (req, res) => {
+  const adminCount = await db.countAdmins();
   if (adminCount > 0) {
     return res.status(403).json({ error: 'Admin already exists. Use the admin panel to manage admins.' });
   }
 
   const sessionToken = req.cookies && req.cookies.session;
-  const user = sessionToken ? db.getUserBySessionToken(sessionToken) : null;
+  const user = sessionToken ? await db.getUserBySessionToken(sessionToken) : null;
   if (!user) {
     return res.status(401).json({ error: 'You must be signed in to use this endpoint.' });
   }
 
-  db.setAdmin(user.id, true);
+  await db.setAdmin(user.id, true);
   res.redirect('/admin');
 });
 
@@ -2670,9 +2670,14 @@ if (process.env.SENTRY_DSN) {
 // Start monitoring scheduler
 startScheduler();
 
-app.listen(PORT, () => {
-  console.log(`OrbioLabs running on http://localhost:${PORT}`);
-  console.log(`Try: curl -X POST http://localhost:${PORT}/audit -H 'Content-Type: application/json' -d '{"url":"https://example.com"}'`);
+db.migrate().then(() => {
+  app.listen(PORT, () => {
+    console.log(`OrbioLabs running on http://localhost:${PORT}`);
+    console.log(`Try: curl -X POST http://localhost:${PORT}/audit -H 'Content-Type: application/json' -d '{"url":"https://example.com"}'`);
+  });
+}).catch(err => {
+  console.error('[DB] Failed to initialize:', err);
+  process.exit(1);
 });
 
 module.exports = app; // for testing

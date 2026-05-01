@@ -52,10 +52,10 @@ setInterval(() => {
 
 // ── Admin auth middleware ────────────────────────────────────────────────────
 
-function requireAdmin(req, res, next) {
+async function requireAdmin(req, res, next) {
   const sessionToken = req.cookies && req.cookies.session;
   if (!sessionToken) return res.status(401).json({ error: 'Authentication required' });
-  const user = db.getUserBySessionToken(sessionToken);
+  const user = await db.getUserBySessionToken(sessionToken);
   if (!user) return res.status(401).json({ error: 'Invalid session' });
   if (!user.is_admin) return res.status(403).json({ error: 'Admin access required' });
   req.adminUser = user;
@@ -64,10 +64,10 @@ function requireAdmin(req, res, next) {
 
 // ── Resolve current user from session (optional) ────────────────────────────
 
-function resolveUser(req) {
+async function resolveUser(req) {
   const sessionToken = req.cookies && req.cookies.session;
   if (!sessionToken) return null;
-  return db.getUserBySessionToken(sessionToken) || null;
+  return (await db.getUserBySessionToken(sessionToken)) || null;
 }
 
 // ── Valid categories ─────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ const VALID_STATUSES = ['new', 'open', 'in_progress', 'resolved', 'closed'];
 
 // ── Public: Create ticket ────────────────────────────────────────────────────
 
-router.post('/api/support/tickets', (req, res) => {
+router.post('/api/support/tickets', async (req, res) => {
   // Rate limit
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
   if (!checkRateLimit(ip)) {
@@ -100,7 +100,7 @@ router.post('/api/support/tickets', (req, res) => {
     return res.status(400).json({ error: 'Description is required (min 10 characters)' });
   }
 
-  const user = resolveUser(req);
+  const user = await resolveUser(req);
   const ticketEmail = email || (user && user.email) || '';
   if (!ticketEmail || !ticketEmail.includes('@')) {
     return res.status(400).json({ error: 'Valid email is required' });
@@ -110,7 +110,7 @@ router.post('/api/support/tickets', (req, res) => {
   const validPriority = VALID_PRIORITIES.includes(priority) ? priority : 'medium';
 
   try {
-    const ticket = db.createSupportTicket({
+    const ticket = await db.createSupportTicket({
       id: uuidv4(),
       email: ticketEmail.trim().toLowerCase(),
       userId: user ? user.id : null,
@@ -145,8 +145,8 @@ router.post('/api/support/tickets', (req, res) => {
 
 // ── Public: Lookup ticket by number ──────────────────────────────────────────
 
-router.get('/api/support/tickets/lookup/:ticketNumber', (req, res) => {
-  const ticket = db.getSupportTicketByNumber(req.params.ticketNumber);
+router.get('/api/support/tickets/lookup/:ticketNumber', async (req, res) => {
+  const ticket = await db.getSupportTicketByNumber(req.params.ticketNumber);
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
 
   // Only return safe public fields
@@ -163,16 +163,16 @@ router.get('/api/support/tickets/lookup/:ticketNumber', (req, res) => {
 
 // ── Admin: Stats ─────────────────────────────────────────────────────────────
 
-router.get('/api/support/tickets/stats', requireAdmin, (req, res) => {
-  const stats = db.getSupportTicketStats();
+router.get('/api/support/tickets/stats', requireAdmin, async (req, res) => {
+  const stats = await db.getSupportTicketStats();
   return res.json(stats);
 });
 
 // ── Admin: List tickets ──────────────────────────────────────────────────────
 
-router.get('/api/support/tickets', requireAdmin, (req, res) => {
+router.get('/api/support/tickets', requireAdmin, async (req, res) => {
   const { status, limit = '50', offset = '0' } = req.query;
-  const tickets = db.listSupportTickets({
+  const tickets = await db.listSupportTickets({
     status: VALID_STATUSES.includes(status) ? status : undefined,
     limit: Math.min(parseInt(limit, 10) || 50, 100),
     offset: parseInt(offset, 10) || 0,
@@ -182,15 +182,15 @@ router.get('/api/support/tickets', requireAdmin, (req, res) => {
 
 // ── Admin: Get single ticket ─────────────────────────────────────────────────
 
-router.get('/api/support/tickets/:id', requireAdmin, (req, res) => {
-  const ticket = db.getSupportTicket(req.params.id);
+router.get('/api/support/tickets/:id', requireAdmin, async (req, res) => {
+  const ticket = await db.getSupportTicket(req.params.id);
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
   return res.json(ticket);
 });
 
 // ── Admin: Update ticket ─────────────────────────────────────────────────────
 
-router.patch('/api/support/tickets/:id', requireAdmin, (req, res) => {
+router.patch('/api/support/tickets/:id', requireAdmin, async (req, res) => {
   const { status, assignee, internalNote, priority } = req.body;
 
   if (status && !VALID_STATUSES.includes(status)) {
@@ -200,7 +200,7 @@ router.patch('/api/support/tickets/:id', requireAdmin, (req, res) => {
     return res.status(400).json({ error: `Invalid priority. Must be one of: ${VALID_PRIORITIES.join(', ')}` });
   }
 
-  const ticket = db.updateSupportTicket(req.params.id, { status, assignee, internalNote, priority });
+  const ticket = await db.updateSupportTicket(req.params.id, { status, assignee, internalNote, priority });
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
 
   // If status changed, email the user
@@ -215,8 +215,8 @@ router.patch('/api/support/tickets/:id', requireAdmin, (req, res) => {
 
 // ── Support widget page ──────────────────────────────────────────────────────
 
-router.get('/support', (req, res) => {
-  const user = resolveUser(req);
+router.get('/support', async (req, res) => {
+  const user = await resolveUser(req);
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(generateWidgetPage(user));
 });
@@ -231,10 +231,10 @@ router.get('/support/widget.js', (_req, res) => {
 
 // ── Admin dashboard page ─────────────────────────────────────────────────────
 
-router.get('/support/admin', (req, res) => {
+router.get('/support/admin', async (req, res) => {
   const sessionToken = req.cookies && req.cookies.session;
   if (!sessionToken) return res.redirect('/signin');
-  const user = db.getUserBySessionToken(sessionToken);
+  const user = await db.getUserBySessionToken(sessionToken);
   if (!user || !user.is_admin) return res.redirect('/signin');
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(generateAdminDashboard());

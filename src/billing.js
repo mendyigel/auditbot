@@ -42,21 +42,21 @@ function generateApiKey() {
   return 'ab_live_' + crypto.randomBytes(24).toString('hex');
 }
 
-function getOrCreateApiKeyForCustomer(customerId, email) {
+async function getOrCreateApiKeyForCustomer(customerId, email) {
   // If we already have a key for this customer, return it
-  const existing = db.getSubscriptionByCustomerId(customerId);
+  const existing = await db.getSubscriptionByCustomerId(customerId);
   if (existing) return existing.apiKey;
 
   const apiKey = generateApiKey();
-  db.upsertSubscription({ apiKey, email, customerId, status: 'incomplete' });
+  await db.upsertSubscription({ apiKey, email, customerId, status: 'incomplete' });
   // Re-read to return the actual stored key (upsert may have kept an existing one)
-  const saved = db.getSubscriptionByCustomerId(customerId);
+  const saved = await db.getSubscriptionByCustomerId(customerId);
   return saved ? saved.apiKey : apiKey;
 }
 
 /** Returns the subscription record for a given API key, or null. */
-function lookupSubscription(apiKey) {
-  return db.getSubscriptionByApiKey(apiKey);
+async function lookupSubscription(apiKey) {
+  return await db.getSubscriptionByApiKey(apiKey);
 }
 
 // ── Plan definitions ──────────────────────────────────────────────────────────
@@ -104,8 +104,8 @@ const TRIAL_AUDIT_LIMIT = 10;
 const TRIAL_PDF_LIMIT   = 3;
 
 /** Returns true if the API key has an active, trialing, or cancelling subscription. */
-function isActive(apiKey) {
-  const sub = db.getSubscriptionByApiKey(apiKey);
+async function isActive(apiKey) {
+  const sub = await db.getSubscriptionByApiKey(apiKey);
   return sub && (sub.status === 'active' || sub.status === 'trialing' || sub.status === 'cancelling');
 }
 
@@ -208,8 +208,8 @@ async function handleWebhook(rawBody, signature) {
       if (session.mode !== 'subscription') break;
       const customerId = session.customer;
       const customerEmail = session.customer_details?.email || session.customer_email || '';
-      const apiKey = getOrCreateApiKeyForCustomer(customerId, customerEmail);
-      db.updateSubscriptionStatus({
+      const apiKey = await getOrCreateApiKeyForCustomer(customerId, customerEmail);
+      await db.updateSubscriptionStatus({
         customerId,
         status: 'active',
         subscriptionId: session.subscription,
@@ -220,7 +220,7 @@ async function handleWebhook(rawBody, signature) {
         const stripeSub = await getStripe().subscriptions.retrieve(session.subscription);
         tier = stripeSub.metadata?.plan_tier || getTierFromPriceId(stripeSub.items?.data?.[0]?.price?.id) || 'pro';
       } catch (_) {}
-      db.updatePlanTier(customerId, tier);
+      await db.updatePlanTier(customerId, tier);
       console.log('[stripe] checkout complete — customer:', customerId, '— tier:', tier, '— apiKey:', apiKey);
       if (customerEmail) {
         const receiptOpts = tier === 'starter'
@@ -241,28 +241,28 @@ async function handleWebhook(rawBody, signature) {
       if (subscription.cancel_at_period_end && subscription.status === 'active') {
         effectiveStatus = 'cancelling';
       }
-      db.updateSubscriptionStatus({
+      await db.updateSubscriptionStatus({
         customerId: subscription.customer,
         status: effectiveStatus,
         subscriptionId: subscription.id,
       });
       // Sync plan tier on upgrade/downgrade
       const updatedTier = subscription.metadata?.plan_tier || getTierFromPriceId(subscription.items?.data?.[0]?.price?.id) || 'pro';
-      db.updatePlanTier(subscription.customer, updatedTier);
+      await db.updatePlanTier(subscription.customer, updatedTier);
       break;
     }
 
     case 'customer.subscription.deleted': {
       const subscription = data.object;
       // Check if this was a trial cancellation (before we overwrite the status)
-      const priorSub = db.getSubscriptionByCustomerId(subscription.customer);
+      const priorSub = await db.getSubscriptionByCustomerId(subscription.customer);
       const wasTrial = priorSub && priorSub.status === 'trialing';
-      db.updateSubscriptionStatus({
+      await db.updateSubscriptionStatus({
         customerId: subscription.customer,
         status: 'cancelled',
         subscriptionId: subscription.id,
       });
-      const cancelledSub = db.getSubscriptionByCustomerId(subscription.customer);
+      const cancelledSub = await db.getSubscriptionByCustomerId(subscription.customer);
       if (cancelledSub?.email) {
         email.sendCancellation(cancelledSub.email, { wasTrial })
           .catch((err) => console.error('[email] cancellation email failed:', err.message));
@@ -272,7 +272,7 @@ async function handleWebhook(rawBody, signature) {
 
     case 'invoice.payment_failed': {
       const invoice = data.object;
-      db.updateSubscriptionStatus({
+      await db.updateSubscriptionStatus({
         customerId: invoice.customer,
         status: 'past_due',
       });
@@ -376,10 +376,10 @@ async function fulfillCheckoutSession(sessionId) {
   const customerEmail = session.customer_details?.email || session.customer_email || '';
   if (!customerId) return null;
 
-  const apiKey = getOrCreateApiKeyForCustomer(customerId, customerEmail);
+  const apiKey = await getOrCreateApiKeyForCustomer(customerId, customerEmail);
   // Activate the subscription if checkout is complete
   if (session.payment_status === 'paid' || session.status === 'complete') {
-    db.updateSubscriptionStatus({
+    await db.updateSubscriptionStatus({
       customerId,
       status: 'active',
       subscriptionId: session.subscription || null,
@@ -392,7 +392,7 @@ async function fulfillCheckoutSession(sessionId) {
         tier = stripeSub.metadata?.plan_tier || getTierFromPriceId(stripeSub.items?.data?.[0]?.price?.id) || 'pro';
       }
     } catch (_) {}
-    db.updatePlanTier(customerId, tier);
+    await db.updatePlanTier(customerId, tier);
   }
 
   return { apiKey, email: customerEmail, customerId };
@@ -406,7 +406,7 @@ async function fulfillCheckoutSession(sessionId) {
  * Returns { immediate: boolean, currentPeriodEnd: number|null }
  */
 async function cancelSubscription(apiKey) {
-  const sub = db.getSubscriptionByApiKey(apiKey);
+  const sub = await db.getSubscriptionByApiKey(apiKey);
   if (!sub) throw new Error('Subscription not found');
   if (!sub.subscriptionId) throw new Error('No Stripe subscription linked');
 

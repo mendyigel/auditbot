@@ -16,10 +16,10 @@ const router = express.Router();
 
 // ── Admin auth middleware ────────────────────────────────────────────────────
 
-function requireAdmin(req, res, next) {
+async function requireAdmin(req, res, next) {
   const sessionToken = req.cookies && req.cookies.session;
   if (!sessionToken) return res.redirect('/signin');
-  const user = db.getUserBySessionToken(sessionToken);
+  const user = await db.getUserBySessionToken(sessionToken);
   if (!user) return res.redirect('/signin');
   if (!user.is_admin) return res.status(403).send(errorPage('Access Denied', 'You do not have admin privileges.'));
   req.adminUser = user;
@@ -153,10 +153,10 @@ function escHtml(str) {
 
 // ── Phase 1: Dashboard ──────────────────────────────────────────────────────
 
-router.get('/', (req, res) => {
-  const stats = db.getAdminStats();
-  const recentUsers = db.getAllUsers({ limit: 10 });
-  const recentSubs = db.getAllSubscriptions({ limit: 10 });
+router.get('/', async (req, res) => {
+  const stats = await db.getAdminStats();
+  const recentUsers = await db.getAllUsers({ limit: 10 });
+  const recentSubs = await db.getAllSubscriptions({ limit: 10 });
 
   const body = `
     <h1>Admin Dashboard</h1>
@@ -229,11 +229,11 @@ router.get('/', (req, res) => {
 
 // ── Phase 2: Subscription Management ────────────────────────────────────────
 
-router.get('/subscriptions', (req, res) => {
+router.get('/subscriptions', async (req, res) => {
   const search = req.query.search || '';
   const status = req.query.status || '';
   const planTier = req.query.plan || '';
-  const subs = db.getAllSubscriptions({ search: search || undefined, status: status || undefined, planTier: planTier || undefined });
+  const subs = await db.getAllSubscriptions({ search: search || undefined, status: status || undefined, planTier: planTier || undefined });
 
   const body = `
     <h1>Subscriptions</h1>
@@ -272,8 +272,8 @@ router.get('/subscriptions', (req, res) => {
   res.send(layout('Subscriptions', 'subscriptions', body, req.adminUser));
 });
 
-router.get('/subscriptions/:apiKey', (req, res) => {
-  const sub = db.getSubscriptionByApiKey(req.params.apiKey);
+router.get('/subscriptions/:apiKey', async (req, res) => {
+  const sub = await db.getSubscriptionByApiKey(req.params.apiKey);
   if (!sub) return res.status(404).send(errorPage('Not Found', 'Subscription not found.'));
 
   const flash = req.query.msg ? `<div class="flash flash-success">${escHtml(req.query.msg)}</div>` : '';
@@ -323,28 +323,28 @@ router.get('/subscriptions/:apiKey', (req, res) => {
   res.send(layout('Subscription Detail', 'subscriptions', body, req.adminUser));
 });
 
-router.post('/subscriptions/:apiKey/status', (req, res) => {
+router.post('/subscriptions/:apiKey/status', async (req, res) => {
   const { status } = req.body;
-  if (status) db.updateSubscriptionFields(req.params.apiKey, { status });
+  if (status) await db.updateSubscriptionFields(req.params.apiKey, { status });
   res.redirect(`/admin/subscriptions/${encodeURIComponent(req.params.apiKey)}?msg=Status+updated`);
 });
 
-router.post('/subscriptions/:apiKey/plan', (req, res) => {
+router.post('/subscriptions/:apiKey/plan', async (req, res) => {
   const { plan_tier } = req.body;
-  if (plan_tier) db.updateSubscriptionFields(req.params.apiKey, { plan_tier });
+  if (plan_tier) await db.updateSubscriptionFields(req.params.apiKey, { plan_tier });
   res.redirect(`/admin/subscriptions/${encodeURIComponent(req.params.apiKey)}?msg=Plan+updated`);
 });
 
-router.post('/subscriptions/:apiKey/reset-audits', (req, res) => {
-  db.updateSubscriptionFields(req.params.apiKey, { monthly_audit_count: 0 });
+router.post('/subscriptions/:apiKey/reset-audits', async (req, res) => {
+  await db.updateSubscriptionFields(req.params.apiKey, { monthly_audit_count: 0 });
   res.redirect(`/admin/subscriptions/${encodeURIComponent(req.params.apiKey)}?msg=Monthly+audit+count+reset`);
 });
 
 // ── Phase 3: User Management ────────────────────────────────────────────────
 
-router.get('/users', (req, res) => {
+router.get('/users', async (req, res) => {
   const search = req.query.search || '';
-  const users = db.getAllUsers({ search: search || undefined });
+  const users = await db.getAllUsers({ search: search || undefined });
 
   const body = `
     <h1>Users</h1>
@@ -372,12 +372,12 @@ router.get('/users', (req, res) => {
   res.send(layout('Users', 'users', body, req.adminUser));
 });
 
-router.get('/users/:id', (req, res) => {
-  const user = db.getUserById(req.params.id);
+router.get('/users/:id', async (req, res) => {
+  const user = await db.getUserById(req.params.id);
   if (!user) return res.status(404).send(errorPage('Not Found', 'User not found.'));
 
-  const sub = user.api_key ? db.getSubscriptionByApiKey(user.api_key) : null;
-  const reports = db.getReportsByUser(user.id);
+  const sub = user.api_key ? await db.getSubscriptionByApiKey(user.api_key) : null;
+  const reports = await db.getReportsByUser(user.id);
   const flash = req.query.msg ? `<div class="flash flash-success">${escHtml(req.query.msg)}</div>` : '';
 
   const body = `
@@ -427,10 +427,10 @@ router.get('/users/:id', (req, res) => {
   res.send(layout('User Detail', 'users', body, req.adminUser));
 });
 
-router.post('/users/:id/toggle-admin', (req, res) => {
-  const user = db.getUserById(req.params.id);
+router.post('/users/:id/toggle-admin', async (req, res) => {
+  const user = await db.getUserById(req.params.id);
   if (!user) return res.redirect('/admin/users');
-  db.setAdmin(user.id, !user.is_admin);
+  await db.setAdmin(user.id, !user.is_admin);
   res.redirect(`/admin/users/${encodeURIComponent(user.id)}?msg=Admin+status+updated`);
 });
 
@@ -440,15 +440,15 @@ router.post('/users/:id/reset-password', async (req, res) => {
     return res.redirect(`/admin/users/${encodeURIComponent(req.params.id)}?msg=Password+must+be+at+least+6+characters`);
   }
   const hash = await bcrypt.hash(new_password, 10);
-  db.updatePassword(req.params.id, hash);
+  await db.updatePassword(req.params.id, hash);
   res.redirect(`/admin/users/${encodeURIComponent(req.params.id)}?msg=Password+reset+successfully`);
 });
 
 // ── Phase 4: Charts & Advanced Metrics ──────────────────────────────────────
 
-router.get('/charts', (req, res) => {
+router.get('/charts', async (req, res) => {
   const days = parseInt(req.query.days, 10) || 30;
-  const stats = db.getAdminStats();
+  const stats = await db.getAdminStats();
 
   const body = `
     <h1>Charts & Metrics</h1>
@@ -548,13 +548,13 @@ router.get('/charts', (req, res) => {
 });
 
 // JSON API for chart data
-router.get('/api/charts', (req, res) => {
+router.get('/api/charts', async (req, res) => {
   const days = parseInt(req.query.days, 10) || 30;
 
-  const signupsRaw = db.getTimeSeriesSignups(days);
-  const auditsRaw = db.getTimeSeriesAudits(days);
-  const revenueRaw = db.getTimeSeriesRevenue(days);
-  const stats = db.getAdminStats();
+  const signupsRaw = await db.getTimeSeriesSignups(days);
+  const auditsRaw = await db.getTimeSeriesAudits(days);
+  const revenueRaw = await db.getTimeSeriesRevenue(days);
+  const stats = await db.getAdminStats();
 
   // Build day-by-day labels from (today - days) to today
   const now = Date.now();

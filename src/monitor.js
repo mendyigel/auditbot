@@ -51,7 +51,7 @@ function startScheduler() {
  * Process all sites that are due for a monitoring audit.
  */
 async function processDueSites() {
-  const dueSites = db.getDueSites(20);
+  const dueSites = await db.getDueSites(20);
   if (dueSites.length === 0) return;
 
   console.log(`[monitor] ${dueSites.length} site(s) due for audit`);
@@ -93,7 +93,7 @@ async function runMonitoringAudit(site) {
   if (audit.error) {
     console.error(`[monitor] Audit failed for ${site.url}: ${audit.error}`);
     // TODO: track consecutive failures and disable after MAX_CONSECUTIVE_FAILURES
-    db.updateSiteNextRun(site.id, site.frequency);
+    await db.updateSiteNextRun(site.id, site.frequency);
     return;
   }
 
@@ -123,11 +123,11 @@ async function runMonitoringAudit(site) {
   const overallScore = Math.round((seoScore + performanceScore + accessibilityScore) / 3);
 
   // Get previous snapshot for comparison
-  const previousSnapshot = db.getLatestSnapshot(site.id);
+  const previousSnapshot = await db.getLatestSnapshot(site.id);
 
   // Save new snapshot
   const snapshotId = uuidv4();
-  db.saveSnapshot({
+  await db.saveSnapshot({
     id: snapshotId,
     monitoredSiteId: site.id,
     reportId: null,
@@ -148,7 +148,7 @@ async function runMonitoringAudit(site) {
   }
 
   // Update next run time
-  db.updateSiteNextRun(site.id, site.frequency);
+  await db.updateSiteNextRun(site.id, site.frequency);
 
   console.log(`[monitor] Completed audit for ${site.url} — overall: ${overallScore}`);
 }

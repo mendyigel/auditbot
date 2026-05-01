@@ -1,3 +1,9 @@
+databases:
+  - name: auditbot-db
+    plan: free
+    databaseName: auditbot
+    user: auditbot
+
 services:
   - type: web
     name: auditbot
@@ -10,13 +16,11 @@ services:
         value: production
       - key: APP_URL
         value: https://orbiolab.com
-      - key: DB_PATH
-        value: /app/data/auditbot.db
+      - key: DATABASE_URL
+        fromDatabase:
+          name: auditbot-db
+          property: connectionString
     customDomains:
       - name: orbiolab.com
       - name: www.orbiolab.com
-    disk:
-      name: auditbot-data
-      mountPath: /app/data
-      sizeGB: 1
     autoDeploy: false

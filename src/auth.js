@@ -19,7 +19,7 @@ const db = require('./db');
  * Resolve the API key from the request — checks Bearer token first, then session cookie.
  * Returns { apiKey, user } or { apiKey: null, user: null }.
  */
-function resolveApiKey(req) {
+async function resolveApiKey(req) {
   // 1. Bearer token takes priority (API / programmatic access)
   const authHeader = req.headers['authorization'] || '';
   if (authHeader.startsWith('Bearer ')) {
@@ -29,7 +29,7 @@ function resolveApiKey(req) {
   // 2. Session cookie (browser sign-in)
   const sessionToken = req.cookies && req.cookies.session;
   if (sessionToken) {
-    const user = db.getUserBySessionToken(sessionToken);
+    const user = await db.getUserBySessionToken(sessionToken);
     if (user && user.api_key) {
       return { apiKey: user.api_key, user };
     }
@@ -106,18 +106,18 @@ const FREE_TIER_HOURLY_LIMIT = 5;
  * This enables Tier 1 features (site crawl, competitor benchmarking, full audit)
  * to be used without any paid plan.
  */
-function allowFreeTier(req, res, next) {
+async function allowFreeTier(req, res, next) {
   // Dev / test: skip all enforcement
   if (!process.env.STRIPE_SECRET_KEY) {
     return next();
   }
 
-  const { apiKey } = resolveApiKey(req);
+  const { apiKey } = await resolveApiKey(req);
 
   // If user has a valid API key, try to attach subscription and enforce limits
   if (apiKey) {
-    const sub = lookupSubscription(apiKey);
-    if (sub && isActive(apiKey)) {
+    const sub = await lookupSubscription(apiKey);
+    if (sub && await isActive(apiKey)) {
       // Trial limit enforcement
       if (sub.status === 'trialing') {
         const appUrl = process.env.APP_URL || '';
@@ -134,7 +134,7 @@ function allowFreeTier(req, res, next) {
         // Starter tier monthly limit
         if (sub.status === 'active' && sub.planTier === 'starter') {
           const plan = PLANS.starter;
-          const monthlyCount = db.getMonthlyAuditCount(apiKey);
+          const monthlyCount = await db.getMonthlyAuditCount(apiKey);
           if (monthlyCount >= plan.monthlyAudits) {
             // Monthly limit reached — fall through to free-tier rate limiting
           } else {
@@ -183,13 +183,13 @@ function allowFreeTier(req, res, next) {
  *   - 5-audit monthly limit
  * Skip enforcement when STRIPE_SECRET_KEY is absent (local dev / CI).
  */
-function requireActiveSubscription(req, res, next) {
+async function requireActiveSubscription(req, res, next) {
   // Dev / test: skip billing enforcement if Stripe is not configured
   if (!process.env.STRIPE_SECRET_KEY) {
     return next();
   }
 
-  const { apiKey, user } = resolveApiKey(req);
+  const { apiKey, user } = await resolveApiKey(req);
 
   if (!apiKey) {
     return res.status(401).json({
@@ -201,7 +201,7 @@ function requireActiveSubscription(req, res, next) {
     });
   }
 
-  const sub = lookupSubscription(apiKey);
+  const sub = await lookupSubscription(apiKey);
   if (!sub) {
     return res.status(401).json({
       error: 'Invalid API key',
@@ -209,7 +209,7 @@ function requireActiveSubscription(req, res, next) {
     });
   }
 
-  if (!isActive(apiKey)) {
+  if (!await isActive(apiKey)) {
     return res.status(402).json({
       error: 'Subscription inactive',
       detail: `Your subscription status is "${sub.status}". Manage it at /billing/portal?key=${apiKey}`,
@@ -246,7 +246,7 @@ function requireActiveSubscription(req, res, next) {
   // ── Starter tier monthly audit limit ─────────────────────────────────────────
   if (sub.status === 'active' && sub.planTier === 'starter') {
     const plan = PLANS.starter;
-    const monthlyCount = db.getMonthlyAuditCount(apiKey);
+    const monthlyCount = await db.getMonthlyAuditCount(apiKey);
     if (monthlyCount >= plan.monthlyAudits) {
       const appUrl = process.env.APP_URL || '';
       return res.status(402).json({
