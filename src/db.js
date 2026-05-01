@@ -132,6 +132,32 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_roadmaps_site ON roadmaps(monitored_site_id);
 `);
 
+// ── Support Tickets table ────────────────────────────────────────────────────
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS support_tickets (
+    id            TEXT PRIMARY KEY,
+    ticket_number TEXT NOT NULL UNIQUE,
+    email         TEXT NOT NULL,
+    user_id       TEXT,
+    category      TEXT NOT NULL DEFAULT 'other',
+    subject       TEXT NOT NULL,
+    description   TEXT NOT NULL,
+    priority      TEXT NOT NULL DEFAULT 'medium',
+    status        TEXT NOT NULL DEFAULT 'new',
+    assignee      TEXT,
+    internal_notes TEXT NOT NULL DEFAULT '[]',
+    status_history TEXT NOT NULL DEFAULT '[]',
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets(status);
+  CREATE INDEX IF NOT EXISTS idx_support_tickets_email ON support_tickets(email);
+  CREATE INDEX IF NOT EXISTS idx_support_tickets_created ON support_tickets(created_at);
+  CREATE INDEX IF NOT EXISTS idx_support_tickets_number ON support_tickets(ticket_number);
+`);
+
 // ── Report helpers ─────────────────────────────────────────────────────────────
 
 const stmts = {
@@ -740,6 +766,149 @@ function getTimeSeriesRevenue(days = 30) {
   `).all(cutoff);
 }
 
+// ── Support Tickets API ─────────────────────────────────────────────────────
+
+const supportStmts = {
+  insert: db.prepare(
+    `INSERT INTO support_tickets (id, ticket_number, email, user_id, category, subject, description, priority, status, assignee, internal_notes, status_history, created_at, updated_at)
+     VALUES (@id, @ticket_number, @email, @user_id, @category, @subject, @description, @priority, @status, @assignee, @internal_notes, @status_history, @created_at, @updated_at)`
+  ),
+  getById: db.prepare(`SELECT * FROM support_tickets WHERE id = ?`),
+  getByNumber: db.prepare(`SELECT * FROM support_tickets WHERE ticket_number = ?`),
+  getAll: db.prepare(`SELECT * FROM support_tickets ORDER BY created_at DESC LIMIT ? OFFSET ?`),
+  getByStatus: db.prepare(`SELECT * FROM support_tickets WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`),
+  getByEmail: db.prepare(`SELECT * FROM support_tickets WHERE email = ? ORDER BY created_at DESC`),
+  countAll: db.prepare(`SELECT COUNT(*) as cnt FROM support_tickets`),
+  countByStatus: db.prepare(`SELECT status, COUNT(*) as cnt FROM support_tickets GROUP BY status`),
+  update: db.prepare(
+    `UPDATE support_tickets SET status = @status, assignee = @assignee, internal_notes = @internal_notes, status_history = @status_history, priority = @priority, updated_at = @updated_at WHERE id = @id`
+  ),
+  nextTicketNum: db.prepare(`SELECT COUNT(*) as cnt FROM support_tickets`),
+  avgResponseTime: db.prepare(
+    `SELECT AVG(updated_at - created_at) as avg_ms FROM support_tickets WHERE status = 'resolved'`
+  ),
+  categoryBreakdown: db.prepare(
+    `SELECT category, COUNT(*) as cnt FROM support_tickets GROUP BY category`
+  ),
+};
+
+function generateTicketNumber() {
+  const cnt = supportStmts.nextTicketNum.get().cnt;
+  return `SUP-${String(cnt + 1).padStart(4, '0')}`;
+}
+
+function createSupportTicket({ id, email, userId, category, subject, description, priority }) {
+  const now = Date.now();
+  const ticketNumber = generateTicketNumber();
+  const statusHistory = JSON.stringify([{ status: 'new', at: now }]);
+  supportStmts.insert.run({
+    id,
+    ticket_number: ticketNumber,
+    email: email || '',
+    user_id: userId || null,
+    category: category || 'other',
+    subject,
+    description,
+    priority: priority || 'medium',
+    status: 'new',
+    assignee: null,
+    internal_notes: '[]',
+    status_history: statusHistory,
+    created_at: now,
+    updated_at: now,
+  });
+  return getSupportTicket(id);
+}
+
+function getSupportTicket(id) {
+  const row = supportStmts.getById.get(id);
+  return row ? rowToTicket(row) : null;
+}
+
+function getSupportTicketByNumber(ticketNumber) {
+  const row = supportStmts.getByNumber.get(ticketNumber);
+  return row ? rowToTicket(row) : null;
+}
+
+function listSupportTickets({ status, limit = 50, offset = 0 } = {}) {
+  const rows = status
+    ? supportStmts.getByStatus.all(status, limit, offset)
+    : supportStmts.getAll.all(limit, offset);
+  return rows.map(rowToTicket);
+}
+
+function getSupportTicketsByEmail(email) {
+  return supportStmts.getByEmail.all(email).map(rowToTicket);
+}
+
+function updateSupportTicket(id, { status, assignee, internalNote, priority }) {
+  const existing = supportStmts.getById.get(id);
+  if (!existing) return null;
+
+  const now = Date.now();
+  const notes = JSON.parse(existing.internal_notes || '[]');
+  if (internalNote) {
+    notes.push({ text: internalNote, at: now });
+  }
+
+  const history = JSON.parse(existing.status_history || '[]');
+  const newStatus = status || existing.status;
+  if (status && status !== existing.status) {
+    history.push({ status, at: now });
+  }
+
+  supportStmts.update.run({
+    id,
+    status: newStatus,
+    assignee: assignee !== undefined ? assignee : existing.assignee,
+    internal_notes: JSON.stringify(notes),
+    status_history: JSON.stringify(history),
+    priority: priority || existing.priority,
+    updated_at: now,
+  });
+
+  return getSupportTicket(id);
+}
+
+function getSupportTicketStats() {
+  const total = supportStmts.countAll.get().cnt;
+  const byStatus = {};
+  for (const row of supportStmts.countByStatus.all()) {
+    byStatus[row.status] = row.cnt;
+  }
+  const avgResponse = supportStmts.avgResponseTime.get().avg_ms || 0;
+  const categories = {};
+  for (const row of supportStmts.categoryBreakdown.all()) {
+    categories[row.category] = row.cnt;
+  }
+  return {
+    total,
+    byStatus,
+    avgResponseTimeMs: Math.round(avgResponse),
+    categories,
+    resolutionRate: total > 0 ? Math.round(((byStatus.resolved || 0) / total) * 100) : 0,
+  };
+}
+
+function rowToTicket(row) {
+  return {
+    id: row.id,
+    ticketNumber: row.ticket_number,
+    email: row.email,
+    userId: row.user_id,
+    category: row.category,
+    subject: row.subject,
+    description: row.description,
+    priority: row.priority,
+    status: row.status,
+    assignee: row.assignee,
+    internalNotes: JSON.parse(row.internal_notes || '[]'),
+    statusHistory: JSON.parse(row.status_history || '[]'),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 /** Cheap liveness check — throws if the DB connection is broken. */
 function ping() {
   db.prepare('SELECT 1').get();
@@ -795,6 +964,14 @@ module.exports = {
   getRoadmap,
   getLatestRoadmapBySite,
   getRoadmapsByUser,
+  // Support Tickets
+  createSupportTicket,
+  getSupportTicket,
+  getSupportTicketByNumber,
+  listSupportTickets,
+  getSupportTicketsByEmail,
+  updateSupportTicket,
+  getSupportTicketStats,
   // Admin
   countAdmins,
   setAdmin,

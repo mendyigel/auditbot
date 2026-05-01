@@ -379,6 +379,49 @@ async function sendMonitoringAlert({ type, siteUrl, category, oldScore, newScore
   return sendEmail({ to: user.email, subject, html });
 }
 
+// ── Support ticket emails ────────────────────────────────────────────────────
+
+async function sendSupportConfirmation(to, ticketNumber, subject) {
+  const html = layout(`
+    ${h1('We received your request')}
+    ${p(`Your support ticket <strong>${ticketNumber}</strong> has been created.`)}
+    ${p(`<strong>Subject:</strong> ${subject}`)}
+    ${p('Our team will review it and get back to you within 24 hours.')}
+    ${hr()}
+    ${p(`<span style="font-size:13px;color:${B.slate};">You can reference ticket <strong>${ticketNumber}</strong> in any follow-up communication.</span>`)}
+  `);
+  return sendEmail({ to, subject: `[${ticketNumber}] We received your support request`, html });
+}
+
+async function sendSupportStatusUpdate(to, ticketNumber, newStatus) {
+  const statusLabels = { new: 'New', open: 'Open', in_progress: 'In Progress', resolved: 'Resolved', closed: 'Closed' };
+  const label = statusLabels[newStatus] || newStatus;
+  const html = layout(`
+    ${h1(`Ticket ${ticketNumber} — ${label}`)}
+    ${p(`Your support ticket <strong>${ticketNumber}</strong> has been updated to <strong>${label}</strong>.`)}
+    ${newStatus === 'resolved' ? p('If this doesn\'t resolve your issue, simply reply to this email or submit a new request.') : ''}
+    ${btn('View Dashboard', `${APP_URL}/dashboard`)}
+  `);
+  return sendEmail({ to, subject: `[${ticketNumber}] Status updated: ${label}`, html });
+}
+
+async function sendSupportNewTicketNotification(ticket) {
+  const adminEmail = process.env.SUPPORT_NOTIFY_EMAIL || process.env.CEO_EMAIL;
+  if (!adminEmail) {
+    console.log(`[email] No SUPPORT_NOTIFY_EMAIL set — skipping admin notification for ${ticket.ticketNumber}`);
+    return { skipped: true };
+  }
+  const html = layout(`
+    ${h1(`New Support Ticket: ${ticket.ticketNumber}`)}
+    ${p(`<strong>From:</strong> ${ticket.email}`)}
+    ${p(`<strong>Category:</strong> ${ticket.category} &middot; <strong>Priority:</strong> ${ticket.priority}`)}
+    ${p(`<strong>Subject:</strong> ${ticket.subject}`)}
+    ${p(ticket.description.length > 300 ? ticket.description.slice(0, 300) + '...' : ticket.description)}
+    ${btn('Review in Admin', `${APP_URL}/support/admin`)}
+  `);
+  return sendEmail({ to: adminEmail, subject: `[Support] New ticket: ${ticket.ticketNumber} — ${ticket.subject}`, html });
+}
+
 module.exports = {
   sendWelcome,
   sendTrialDay3,
@@ -391,4 +434,7 @@ module.exports = {
   getStatus,
   sendTest,
   sendMonitoringAlert,
+  sendSupportConfirmation,
+  sendSupportStatusUpdate,
+  sendSupportNewTicketNotification,
 };
