@@ -382,11 +382,11 @@ function generateWidgetScript() {
 
   var style = document.createElement('style');
   style.textContent = \`
-    #orbio-support-btn { position: fixed; bottom: 24px; right: 24px; z-index: 99999; width: 56px; height: 56px; border-radius: 50%; background: #3b82f6; border: none; cursor: pointer; box-shadow: 0 4px 16px rgba(59,130,246,0.4); display: flex; align-items: center; justify-content: center; transition: transform 0.2s, box-shadow 0.2s; }
-    #orbio-support-btn:hover { transform: scale(1.08); box-shadow: 0 6px 24px rgba(59,130,246,0.5); }
-    #orbio-support-btn svg { width: 24px; height: 24px; fill: #fff; }
-    #orbio-support-panel { position: fixed; bottom: 92px; right: 24px; z-index: 99999; width: 380px; max-height: 520px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #f1f5f9; display: none; flex-direction: column; overflow: hidden; }
-    #orbio-support-panel.open { display: flex; }
+    #orbio-support-btn { position: fixed; bottom: 24px; right: 24px; z-index: 99999; height: 44px; padding: 0 20px; border-radius: 22px; background: #3b82f6; border: none; cursor: pointer; box-shadow: 0 4px 16px rgba(59,130,246,0.4); display: flex; align-items: center; gap: 8px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 0.875rem; font-weight: 600; color: #fff; transition: transform 0.2s, box-shadow 0.2s; }
+    #orbio-support-btn:hover { transform: scale(1.05); box-shadow: 0 6px 24px rgba(59,130,246,0.5); }
+    #orbio-support-btn svg { width: 18px; height: 18px; fill: #fff; flex-shrink: 0; }
+    #orbio-support-panel { position: fixed; bottom: 80px; right: 24px; z-index: 99999; width: 400px; max-height: 540px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #f1f5f9; flex-direction: column; overflow: hidden; opacity: 0; transform: translateY(16px); pointer-events: none; display: flex; transition: opacity 0.25s ease, transform 0.25s ease; }
+    #orbio-support-panel.open { opacity: 1; transform: translateY(0); pointer-events: auto; }
     .orbio-sp-header { background: #0f172a; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; }
     .orbio-sp-header h3 { font-size: 1rem; font-weight: 700; margin: 0; }
     .orbio-sp-close { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 1.25rem; padding: 0; line-height: 1; }
@@ -407,7 +407,8 @@ function generateWidgetScript() {
     .orbio-sp-success p { color: #94a3b8; font-size: 0.85rem; }
     .orbio-sp-success .tnum { display: inline-block; background: #0f172a; padding: 6px 12px; border-radius: 4px; font-family: monospace; margin-top: 8px; }
     @media (max-width: 480px) {
-      #orbio-support-panel { right: 0; bottom: 0; width: 100%; max-height: 90vh; border-radius: 12px 12px 0 0; }
+      #orbio-support-panel { right: 0; bottom: 0; width: 100%; max-height: 90vh; border-radius: 12px 12px 0 0; transform: translateY(100%); }
+      #orbio-support-panel.open { transform: translateY(0); }
       #orbio-support-btn { bottom: 16px; right: 16px; }
     }
   \`;
@@ -416,7 +417,7 @@ function generateWidgetScript() {
   var btn = document.createElement('button');
   btn.id = 'orbio-support-btn';
   btn.setAttribute('aria-label', 'Open support');
-  btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z"/><path d="M7 9h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2z"/></svg>';
+  btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z"/><path d="M7 9h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2z"/></svg><span>Support</span>';
   document.body.appendChild(btn);
 
   var panel = document.createElement('div');
@@ -446,6 +447,10 @@ function generateWidgetScript() {
           <label>Email</label>
           <input type="email" name="email" placeholder="you@example.com" required>
         </div>
+        <div class="fg">
+          <label>Priority</label>
+          <select name="priority"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select>
+        </div>
         <button type="submit" class="orbio-sp-submit" id="orbio-sp-submit">Submit Request</button>
       </form>
     </div>
@@ -470,6 +475,11 @@ function generateWidgetScript() {
   var spError = document.getElementById('orbio-sp-error');
   var spSubmit = document.getElementById('orbio-sp-submit');
 
+  if (window.ORBIO_USER_EMAIL) {
+    var emailInput = spForm.querySelector('input[name="email"]');
+    if (emailInput) emailInput.value = window.ORBIO_USER_EMAIL;
+  }
+
   spForm.addEventListener('submit', function(e) {
     e.preventDefault();
     spError.style.display = 'none';
@@ -489,6 +499,16 @@ function generateWidgetScript() {
         document.getElementById('orbio-sp-tnum').textContent = result.data.ticketNumber;
         document.getElementById('orbio-sp-form-view').style.display = 'none';
         document.getElementById('orbio-sp-success').style.display = 'block';
+        setTimeout(function() {
+          panel.classList.remove('open');
+          setTimeout(function() {
+            document.getElementById('orbio-sp-form-view').style.display = '';
+            document.getElementById('orbio-sp-success').style.display = 'none';
+            spForm.reset();
+            spSubmit.disabled = false;
+            spSubmit.textContent = 'Submit Request';
+          }, 300);
+        }, 3000);
       })
       .catch(function(err) {
         spError.textContent = err.message;
@@ -793,4 +813,5 @@ function generateAdminDashboard() {
 </html>`;
 }
 
+router.generateWidgetScript = generateWidgetScript;
 module.exports = router;

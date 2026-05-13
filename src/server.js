@@ -76,6 +76,40 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
+// ── Floating support widget injection ──────────────────────────────────────
+// Injects the support widget script before </body> on portal pages.
+// Excluded: landing page, blog, auth pages, API routes, and the support page itself.
+const supportWidgetScript = `<script>${supportRouter.generateWidgetScript()}</script>`;
+const WIDGET_EXCLUDE = ['/', '/blog', '/signup', '/signin', '/auth/', '/api/', '/support', '/billing/webhook', '/health', '/privacy', '/terms'];
+
+app.use(async (req, res, next) => {
+  if (req.method !== 'GET') return next();
+  const path = req.path;
+  if (WIDGET_EXCLUDE.some(ex => path === ex || (ex.endsWith('/') && path.startsWith(ex)))) return next();
+
+  // Resolve user email for widget pre-fill (best-effort, non-blocking)
+  let emailSnippet = '';
+  try {
+    const sessionToken = req.cookies && req.cookies.session;
+    if (sessionToken) {
+      const user = await db.getUserBySessionToken(sessionToken);
+      if (user && user.email) {
+        const safeEmail = user.email.replace(/[<>"'&\\]/g, '');
+        emailSnippet = `<script>window.ORBIO_USER_EMAIL=${JSON.stringify(safeEmail)};</script>`;
+      }
+    }
+  } catch (_) { /* non-critical */ }
+
+  const origSend = res.send.bind(res);
+  res.send = function(body) {
+    if (typeof body === 'string' && res.getHeader('content-type')?.includes('text/html') && body.includes('</body>')) {
+      body = body.replace('</body>', emailSnippet + supportWidgetScript + '</body>');
+    }
+    return origSend(body);
+  };
+  next();
+});
+
 // Prune old report metadata (and orphaned files) daily
 setInterval(async () => {
   await db.pruneOldReports(REPORT_TTL_MS);
